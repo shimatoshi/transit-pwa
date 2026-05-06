@@ -420,8 +420,16 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // === Data Loading ===
-// Load frequency data
+// Load frequency data and through-service pairs
+let throughPairs = new Set();
 fetch('frequency.json?v=1').then(r => r.json()).then(d => { freqData = d; });
+fetch('through_service.json?v=1').then(r => r.json()).then(d => {
+  for (const [a, b] of d.pairs) {
+    throughPairs.add(a + '|' + b);
+    throughPairs.add(b + '|' + a);
+  }
+  console.log(`Through-service pairs loaded: ${d.pairs.length}`);
+});
 
 fetch('graph.json?v=4')
   .then(r => r.json())
@@ -626,11 +634,13 @@ function dijkstra(startId, endId, bannedEdges) {
       // Check banned edges
       if (bannedEdges && bannedEdges.has(u + ':' + v)) continue;
 
-      // Transfer penalty
+      // Transfer penalty (skip if through-service)
       let penalty = 0;
       if (prev[u] !== -1 && prevEdgeLine[u] && prevEdgeLine[u] !== '_rail' &&
           line !== prevEdgeLine[u] && line !== '_rail') {
-        penalty = 500;
+        if (!isThroughService(prevEdgeLine[u], line)) {
+          penalty = 500;
+        }
       }
       const nd = d + w + penalty;
       if (nd < dist[v]) {
@@ -834,11 +844,17 @@ function doSearch() {
   }
 }
 
+// === Check if two lines have through-service (直通運転) ===
+function isThroughService(lineA, lineB) {
+  if (!lineA || !lineB || lineA === lineB) return false;
+  return throughPairs.has(lineA + '|' + lineB);
+}
+
 // === Detect line segments using station line membership ===
 function detectLineSegments(path) {
   // For each pair of consecutive stations, find the shared line.
-  // When the shared line changes, that's a transfer.
-  const segments = []; // {lineName, from, to}
+  // When the shared line changes AND it's not through-service, that's a transfer.
+  const rawSegments = []; // {lineName, from, to}
   let currentLine = '';
   let segStart = 0;
 
@@ -856,7 +872,6 @@ function detectLineSegments(path) {
     let bestLine = '_rail';
 
     if (shared.length > 0) {
-      // Prefer continuing the same line if possible
       if (currentLine && shared.includes(currentLine)) {
         bestLine = currentLine;
       } else {
@@ -867,14 +882,14 @@ function detectLineSegments(path) {
     }
 
     if (bestLine !== currentLine && i > 1) {
-      segments.push({ line: currentLine, from: segStart, to: i - 1 });
+      rawSegments.push({ line: currentLine, from: segStart, to: i - 1 });
       segStart = i - 1;
     }
     currentLine = bestLine;
   }
-  segments.push({ line: currentLine, from: segStart, to: path.length - 1 });
+  rawSegments.push({ line: currentLine, from: segStart, to: path.length - 1 });
 
-  return segments;
+  return rawSegments;
 }
 
 // === Time calculation ===
@@ -905,9 +920,12 @@ function calculateTimes(path, lineSegments, startMinutes) {
     const stationCount = seg.to - seg.from;
 
     // Wait for next train (half the frequency on average)
+    // No wait if this is a through-service continuation
     const hour = Math.floor(currentTime / 60) % 24;
     const freq = getFrequency(seg.line, hour);
-    const waitTime = si === 0 ? 0 : Math.round(freq / 2); // No wait for first segment
+    const prevSeg = si > 0 ? lineSegments[si - 1] : null;
+    const isThrough = prevSeg && isThroughService(prevSeg.line, seg.line);
+    const waitTime = (si === 0 || isThrough) ? 0 : Math.round(freq / 2);
 
     const depTime = currentTime + waitTime;
     // Travel time: ~2.5 min per station
@@ -971,7 +989,13 @@ function renderOneRoute(result, index, searchTime) {
   const depTimeStr = formatTime(segTimes[0].depTime);
   const arrTimeStr = formatTime(segTimes[segTimes.length - 1].arrTime);
   const totalMin = Math.round(segTimes[segTimes.length - 1].arrTime - segTimes[0].depTime);
-  const transferCount = lineSegments.length - 1;
+  // Count real transfers (exclude through-service)
+  let transferCount = 0;
+  for (let i = 1; i < lineSegments.length; i++) {
+    if (!isThroughService(lineSegments[i-1].line, lineSegments[i].line)) {
+      transferCount++;
+    }
+  }
 
   const routeId = 'route-' + index;
   let html = `<div class="route-card">`;
@@ -1019,6 +1043,10 @@ function renderOneRoute(result, index, searchTime) {
     const depT = formatTime(st.depTime);
     const arrT = formatTime(st.arrTime);
 
+    // Check if next segment is through-service (no transfer needed)
+    const nextSeg = si < lineSegments.length - 1 ? lineSegments[si + 1] : null;
+    const throughNext = nextSeg && isThroughService(seg.line, nextSeg.line);
+
     html += `<div class="step">
       <div class="step-line">
         <div class="step-dot" style="background:${color};box-shadow:0 0 0 2px ${color}"></div>
@@ -1030,6 +1058,7 @@ function renderOneRoute(result, index, searchTime) {
           <span class="line-tag" style="background:${color}11;color:${color}">${lineName}</span>
           ${stationCount}駅 ${st.travelTime}分${st.waitTime > 0 ? ` <span style="color:var(--orange)">(待${st.waitTime}分)</span>` : ''}
         </div>
+        ${throughNext ? `<div style="margin-top:4px;font-size:11px;color:var(--green);font-weight:500">↓ ${nextSeg.line} に直通・乗換不要</div>` : ''}
       </div>
     </div>`;
 
