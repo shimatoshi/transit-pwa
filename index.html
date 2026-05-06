@@ -420,9 +420,13 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // === Data Loading ===
-// Load frequency data and through-service pairs
+// Load supplementary data
 let throughPairs = new Set();
+let trainTypes = null;
+let fareData = null;
 fetch('frequency.json?v=1').then(r => r.json()).then(d => { freqData = d; });
+fetch('train_types.json?v=1').then(r => r.json()).then(d => { trainTypes = d; });
+fetch('fares.json?v=1').then(r => r.json()).then(d => { fareData = d; });
 fetch('through_service.json?v=1').then(r => r.json()).then(d => {
   for (const [a, b] of d.pairs) {
     throughPairs.add(a + '|' + b);
@@ -634,6 +638,10 @@ function dijkstra(startId, endId, bannedEdges) {
       // Check banned edges
       if (bannedEdges && bannedEdges.has(u + ':' + v)) continue;
 
+      // Apply speed factor for faster trains
+      const tt = getTrainType(line);
+      const effectiveW = w * tt.speed_factor;
+
       // Transfer penalty (skip if through-service)
       let penalty = 0;
       if (prev[u] !== -1 && prevEdgeLine[u] && prevEdgeLine[u] !== '_rail' &&
@@ -642,7 +650,7 @@ function dijkstra(startId, endId, bannedEdges) {
           penalty = 500;
         }
       }
-      const nd = d + w + penalty;
+      const nd = d + effectiveW + penalty;
       if (nd < dist[v]) {
         dist[v] = nd;
         prev[v] = u;
@@ -909,9 +917,15 @@ function getFrequency(lineName, hour) {
   return freqData.default[period];
 }
 
+// Get best train type for a line
+function getTrainType(lineName) {
+  if (!trainTypes || !trainTypes.types[lineName]) return { type: '各停', speed_factor: 1.0 };
+  // Return the fastest type available
+  const types = trainTypes.types[lineName];
+  return types[0]; // First entry is fastest
+}
+
 function calculateTimes(path, lineSegments, startMinutes) {
-  // startMinutes = minutes since midnight (e.g., 8:30 = 510)
-  // Returns array of {depTime, arrTime} per segment, plus total arrival
   const segTimes = [];
   let currentTime = startMinutes;
 
@@ -919,8 +933,7 @@ function calculateTimes(path, lineSegments, startMinutes) {
     const seg = lineSegments[si];
     const stationCount = seg.to - seg.from;
 
-    // Wait for next train (half the frequency on average)
-    // No wait if this is a through-service continuation
+    // Wait for next train
     const hour = Math.floor(currentTime / 60) % 24;
     const freq = getFrequency(seg.line, hour);
     const prevSeg = si > 0 ? lineSegments[si - 1] : null;
@@ -928,8 +941,11 @@ function calculateTimes(path, lineSegments, startMinutes) {
     const waitTime = (si === 0 || isThrough) ? 0 : Math.round(freq / 2);
 
     const depTime = currentTime + waitTime;
-    // Travel time: ~2.5 min per station
-    const travelTime = stationCount * 2.5;
+
+    // Travel time with train type speed factor
+    const tt = getTrainType(seg.line);
+    const baseTime = stationCount * 2.5;
+    const travelTime = baseTime * tt.speed_factor;
     const arrTime = depTime + travelTime;
 
     segTimes.push({
@@ -937,16 +953,90 @@ function calculateTimes(path, lineSegments, startMinutes) {
       arrTime: Math.round(arrTime),
       waitTime,
       travelTime: Math.round(travelTime),
+      trainType: tt.type,
     });
 
     currentTime = arrTime;
-    // Add transfer walking time (3 min)
-    if (si < lineSegments.length - 1) {
-      currentTime += 3;
+    if (si < lineSegments.length - 1 && !isThroughService(seg.line, lineSegments[si+1].line)) {
+      currentTime += 3; // Transfer walk time only for real transfers
     }
   }
 
   return segTimes;
+}
+
+// Calculate fare for a route
+function calculateFare(path, lineSegments) {
+  if (!fareData) return null;
+
+  // Group consecutive segments by company (through-service stays same company billing)
+  let totalFare = 0;
+  const fareBreakdown = [];
+
+  // Build company lookup from fare data
+  const lineToCompany = {};
+  for (const [company, data] of Object.entries(fareData.companies)) {
+    for (const lineName of data.match) {
+      lineToCompany[lineName] = company;
+    }
+  }
+
+  // Calculate distance per company segment
+  let currentCompany = '';
+  let companyDist = 0;
+
+  for (let si = 0; si < lineSegments.length; si++) {
+    const seg = lineSegments[si];
+    const company = lineToCompany[seg.line] || '';
+
+    // Calculate segment distance from graph edges
+    let segDist = 0;
+    for (let i = seg.from + 1; i <= seg.to; i++) {
+      const fromId = path[i-1].id;
+      const toId = path[i].id;
+      const edges = graph.edges[fromId];
+      if (edges) {
+        const e = edges.find(e => e[0] === toId);
+        if (e) segDist += e[1];
+      }
+    }
+    const segDistKm = segDist / 1000;
+
+    const isThrough = si > 0 && isThroughService(lineSegments[si-1].line, seg.line);
+
+    if (company === currentCompany || isThrough) {
+      companyDist += segDistKm;
+    } else {
+      // Finalize previous company
+      if (currentCompany && companyDist > 0) {
+        const fare = lookupFare(currentCompany, companyDist);
+        totalFare += fare;
+        fareBreakdown.push({ company: currentCompany, dist: companyDist, fare });
+      }
+      currentCompany = company || 'その他';
+      companyDist = segDistKm;
+    }
+  }
+
+  // Finalize last company
+  if (currentCompany && companyDist > 0) {
+    const fare = lookupFare(currentCompany, companyDist);
+    totalFare += fare;
+    fareBreakdown.push({ company: currentCompany, dist: companyDist, fare });
+  }
+
+  return { total: totalFare, breakdown: fareBreakdown };
+}
+
+function lookupFare(company, distKm) {
+  if (!fareData) return Math.round(distKm * 25);
+  const companyData = fareData.companies[company];
+  if (!companyData) return Math.round(distKm * (fareData.default_fare_per_km || 25));
+  const table = companyData.ic_fare;
+  for (const [maxDist, fare] of table) {
+    if (distKm <= maxDist) return fare;
+  }
+  return table[table.length - 1][1]; // Max fare
 }
 
 function formatTime(minutes) {
@@ -1000,12 +1090,17 @@ function renderOneRoute(result, index, searchTime) {
   const routeId = 'route-' + index;
   let html = `<div class="route-card">`;
 
+  // Fare calculation
+  const fareInfo = calculateFare(path, lineSegments);
+  const fareStr = fareInfo ? `¥${fareInfo.total.toLocaleString()}` : '';
+
   // Summary (clickable to toggle detail)
   html += `<div class="route-summary" onclick="toggleRoute('${routeId}')" style="cursor:pointer">
-    <div>
+    <div style="flex:1">
       <div style="font-size:20px;font-weight:700;color:var(--blue)">${depTimeStr} → ${arrTimeStr}</div>
       <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${transferCount > 0 ? transferCount + '回乗換' : '直通'} / ${(distance/1000).toFixed(1)}km</div>
     </div>
+    ${fareStr ? `<div style="font-size:18px;font-weight:700;color:var(--text)">${fareStr}</div>` : ''}
   </div>`;
 
   // Line summary bar (mini colored line showing route composition)
@@ -1056,6 +1151,7 @@ function renderOneRoute(result, index, searchTime) {
         <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${depT}</span>${fromStn.n}</div>
         <div class="step-info">
           <span class="line-tag" style="background:${color}11;color:${color}">${lineName}</span>
+          ${st.trainType !== '各停' && st.trainType !== '普通' ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${st.trainType}</span>` : ''}
           ${stationCount}駅 ${st.travelTime}分${st.waitTime > 0 ? ` <span style="color:var(--orange)">(待${st.waitTime}分)</span>` : ''}
         </div>
         ${throughNext ? `<div style="margin-top:4px;font-size:11px;color:var(--green);font-weight:500">↓ ${nextSeg.line} に直通・乗換不要</div>` : ''}

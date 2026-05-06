@@ -1,0 +1,113 @@
+{
+  "_doc": "路線別の列車種別と駅間所要時間係数。speed_factor: 1.0=各停(2.5min/駅), 0.5=快速(1.25min/駅)等",
+  "types": {
+    "常磐線": [
+      {"type": "快速", "speed_factor": 0.6, "note": "松戸-北千住間ノンストップ等"},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "東海道本線": [
+      {"type": "快速", "speed_factor": 0.5},
+      {"type": "普通", "speed_factor": 0.8}
+    ],
+    "JR東海道本線": [
+      {"type": "快速", "speed_factor": 0.5},
+      {"type": "普通", "speed_factor": 0.8}
+    ],
+    "東海道新幹線": [
+      {"type": "のぞみ", "speed_factor": 0.15},
+      {"type": "ひかり", "speed_factor": 0.2},
+      {"type": "こだま", "speed_factor": 0.3}
+    ],
+    "山手線": [
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "京浜東北線": [
+      {"type": "快速", "speed_factor": 0.7},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "中央線快速": [
+      {"type": "快速", "speed_factor": 0.6},
+      {"type": "特快", "speed_factor": 0.4}
+    ],
+    "総武本線": [
+      {"type": "快速", "speed_factor": 0.6},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "東北本線": [
+      {"type": "快速", "speed_factor": 0.6},
+      {"type": "普通", "speed_factor": 0.8}
+    ],
+    "埼京線": [
+      {"type": "快速", "speed_factor": 0.7},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "横須賀線": [
+      {"type": "快速", "speed_factor": 0.6},
+      {"type": "普通", "speed_factor": 0.8}
+    ],
+    "京成本線": [
+      {"type": "特急", "speed_factor": 0.4},
+      {"type": "快速", "speed_factor": 0.6},
+      {"type": "普通", "speed_factor": 1.0}
+    ],
+    "京成押上線": [
+      {"type": "エアポート快特", "speed_factor": 0.5},
+      {"type": "普通", "speed_factor": 1.0}
+    ],
+    "都営地下鉄浅草線": [
+      {"type": "エアポート快特", "speed_factor": 0.5},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "東武野田線": [
+      {"type": "急行", "speed_factor": 0.6},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "小田急小田原線": [
+      {"type": "快速急行", "speed_factor": 0.35},
+      {"type": "急行", "speed_factor": 0.5},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "京王線": [
+      {"type": "特急", "speed_factor": 0.35},
+      {"type": "急行", "speed_factor": 0.5},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "東急東横線": [
+      {"type": "特急", "speed_factor": 0.45},
+      {"type": "急行", "speed_factor": 0.6},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "東急田園都市線": [
+      {"type": "急行", "speed_factor": 0.6},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "西武池袋線": [
+      {"type": "快速急行", "speed_factor": 0.4},
+      {"type": "急行", "speed_factor": 0.55},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "西武新宿線": [
+      {"type": "急行", "speed_factor": 0.55},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "東武東上線": [
+      {"type": "快速急行", "speed_factor": 0.4},
+      {"type": "急行", "speed_factor": 0.55},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "東武伊勢崎線": [
+      {"type": "急行", "speed_factor": 0.5},
+      {"type": "各停", "speed_factor": 1.0}
+    ],
+    "京急本線": [
+      {"type": "快特", "speed_factor": 0.4},
+      {"type": "エアポート急行", "speed_factor": 0.55},
+      {"type": "普通", "speed_factor": 1.0}
+    ],
+    "京浜急行電鉄本線": [
+      {"type": "快特", "speed_factor": 0.4},
+      {"type": "普通", "speed_factor": 1.0}
+    ]
+  },
+  "default_speed_factor": 1.0
+}
