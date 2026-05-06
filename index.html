@@ -691,7 +691,7 @@ function findKRoutes(startId, endId, k = 3) {
   const seenSignatures = new Set([routeSignature(first)]);
 
   // Try banning different portions of previous routes
-  for (let attempt = 0; attempt < k * 4 && routes.length < k; attempt++) {
+  for (let attempt = 0; attempt < k * 8 && routes.length < k; attempt++) {
     const sourceRoute = routes[attempt % routes.length];
     const pathIds = sourceRoute.path.map(p => p.id);
 
@@ -723,16 +723,14 @@ function findKRoutes(startId, endId, k = 3) {
     const sig = routeSignature(alt);
     if (seenSignatures.has(sig)) continue;
 
-    // Check distance isn't absurdly longer (max 2x the shortest)
-    if (alt.distance > first.distance * 2.5) continue;
+    // Check distance isn't absurdly longer (max 3x the shortest)
+    if (alt.distance > first.distance * 3) continue;
 
     seenSignatures.add(sig);
     routes.push(alt);
   }
 
-  // Sort by distance
-  routes.sort((a, b) => a.distance - b.distance);
-  return routes;
+  return routes; // Don't sort here, sort later by time
 }
 
 // Find all station IDs matching a name exactly
@@ -795,21 +793,37 @@ function doSearch() {
     for (const fid of waypointCandidates[0]) {
       for (const tid of waypointCandidates[1]) {
         if (fid === tid) continue;
-        const routes = findKRoutes(fid, tid, 3);
+        const routes = findKRoutes(fid, tid, 6);
         allRoutes.push(...routes);
       }
     }
-    // Deduplicate and sort
-    allRoutes.sort((a, b) => a.distance - b.distance);
+
+    // Deduplicate by line signature
     const unique = [];
     const sigs = new Set();
     for (const r of allRoutes) {
-      const sig = r.path.map(p => p.id).join(',');
-      if (!sigs.has(sig) && unique.length < 3) {
+      const segs = detectLineSegments(r.path);
+      const sig = segs.map(s => s.line).join('|');
+      if (!sigs.has(sig)) {
         sigs.add(sig);
+        // Pre-calculate estimated time for sorting
+        const segTimes = calculateTimes(r.path, segs, getSearchTime().minutes);
+        r._estTime = segTimes[segTimes.length - 1].arrTime - segTimes[0].depTime;
+        r._transfers = 0;
+        for (let i = 1; i < segs.length; i++) {
+          if (!isThroughService(segs[i-1].line, segs[i].line)) r._transfers++;
+        }
         unique.push(r);
       }
     }
+
+    // Sort by: time first, then transfers
+    unique.sort((a, b) => {
+      const timeDiff = a._estTime - b._estTime;
+      if (Math.abs(timeDiff) > 5) return timeDiff; // >5min差なら時間優先
+      return a._transfers - b._transfers; // 時間近ければ乗換少ない方
+    });
+
     if (unique.length === 0) {
       const fn = graph.stations[waypointCandidates[0][0]].n;
       const tn = graph.stations[waypointCandidates[1][0]].n;
@@ -1176,14 +1190,33 @@ function renderOneRoute(result, index, searchTime) {
   return html;
 }
 
+let allFoundRoutes = [];
 function renderMultipleResults(routes) {
+  allFoundRoutes = routes;
   const searchTime = getSearchTime();
+  const showCount = Math.min(3, routes.length);
   let html = '';
   if (routes.length > 1) {
     html += `<div style="padding:4px 16px 0;font-size:13px;color:var(--muted)">${routes.length}件の経路</div>`;
   }
-  for (let i = 0; i < routes.length; i++) {
+  for (let i = 0; i < showCount; i++) {
     html += renderOneRoute(routes[i], i, searchTime);
+  }
+  if (routes.length > showCount) {
+    html += `<button onclick="showMoreRoutes()" id="show-more-btn" style="
+      width:calc(100% - 24px);margin:0 12px 12px;padding:12px;
+      background:white;border:1px solid var(--border);border-radius:10px;
+      font-size:14px;color:var(--blue);cursor:pointer;font-weight:500;
+    ">さらに${routes.length - showCount}件表示</button>`;
+  }
+  document.getElementById('results').innerHTML = html;
+}
+
+function showMoreRoutes() {
+  const searchTime = getSearchTime();
+  let html = `<div style="padding:4px 16px 0;font-size:13px;color:var(--muted)">${allFoundRoutes.length}件の経路</div>`;
+  for (let i = 0; i < allFoundRoutes.length; i++) {
+    html += renderOneRoute(allFoundRoutes[i], i, searchTime);
   }
   document.getElementById('results').innerHTML = html;
 }
