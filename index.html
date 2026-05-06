@@ -969,11 +969,10 @@ function calculateTimes(path, lineSegments, startMinutes) {
 function calculateFare(path, lineSegments) {
   if (!fareData) return null;
 
-  // Group consecutive segments by company (through-service stays same company billing)
   let totalFare = 0;
   const fareBreakdown = [];
 
-  // Build company lookup from fare data
+  // Build company lookup
   const lineToCompany = {};
   for (const [company, data] of Object.entries(fareData.companies)) {
     for (const lineName of data.match) {
@@ -982,6 +981,7 @@ function calculateFare(path, lineSegments) {
   }
 
   // Calculate distance per company segment
+  // Through-service does NOT merge companies for fare — you pay each company separately
   let currentCompany = '';
   let companyDist = 0;
 
@@ -989,7 +989,7 @@ function calculateFare(path, lineSegments) {
     const seg = lineSegments[si];
     const company = lineToCompany[seg.line] || '';
 
-    // Calculate segment distance from graph edges
+    // Calculate segment distance
     let segDist = 0;
     for (let i = seg.from + 1; i <= seg.to; i++) {
       const fromId = path[i-1].id;
@@ -1002,12 +1002,11 @@ function calculateFare(path, lineSegments) {
     }
     const segDistKm = segDist / 1000;
 
-    const isThrough = si > 0 && isThroughService(lineSegments[si-1].line, seg.line);
-
-    if (company === currentCompany || isThrough) {
+    // Same company: accumulate distance
+    if (company === currentCompany) {
       companyDist += segDistKm;
     } else {
-      // Finalize previous company
+      // Different company: finalize previous, start new
       if (currentCompany && companyDist > 0) {
         const fare = lookupFare(currentCompany, companyDist);
         totalFare += fare;
@@ -1018,7 +1017,7 @@ function calculateFare(path, lineSegments) {
     }
   }
 
-  // Finalize last company
+  // Finalize last
   if (currentCompany && companyDist > 0) {
     const fare = lookupFare(currentCompany, companyDist);
     totalFare += fare;
