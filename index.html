@@ -315,6 +315,30 @@ body {
   font-size: 14px;
 }
 
+/* Time selector */
+.time-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.time-selector select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  background: #f8fafc;
+}
+.time-selector input[type="time"] {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  background: #f8fafc;
+}
+
 /* Status bar */
 .status-bar {
   text-align: center;
@@ -355,6 +379,15 @@ body {
       </div>
     </div>
   </div>
+  <!-- Time selector -->
+  <div class="time-selector">
+    <select id="time-type">
+      <option value="dep">出発</option>
+      <option value="arr">到着</option>
+      <option value="now">現在時刻</option>
+    </select>
+    <input type="time" id="time-input" value="">
+  </div>
   <div class="controls">
     <button class="add-via-btn" onclick="addVia()">+ 経由駅</button>
     <button class="swap-btn" onclick="swapDepArr()">入替</button>
@@ -374,9 +407,22 @@ body {
 <script>
 // === Global State ===
 let graph = null;
+let freqData = null;
 const selectedStations = {}; // fieldId -> stationIndex
 
+// Set default time to now
+document.addEventListener('DOMContentLoaded', () => {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  document.getElementById('time-input').value = `${hh}:${mm}`;
+  document.getElementById('time-type').value = 'now';
+});
+
 // === Data Loading ===
+// Load frequency data
+fetch('frequency.json?v=1').then(r => r.json()).then(d => { freqData = d; });
+
 fetch('graph.json?v=4')
   .then(r => r.json())
   .then(data => {
@@ -831,6 +877,79 @@ function detectLineSegments(path) {
   return segments;
 }
 
+// === Time calculation ===
+function getTimePeriod(hour) {
+  if (hour >= 7 && hour < 9) return 'rush';
+  if (hour >= 17 && hour < 19) return 'rush';
+  if (hour >= 9 && hour < 17) return 'day';
+  if (hour >= 19 && hour < 23) return 'night';
+  return 'early'; // 5-7 or 23-5
+}
+
+function getFrequency(lineName, hour) {
+  if (!freqData) return 10;
+  const period = getTimePeriod(hour);
+  const lineFreq = freqData.lines[lineName];
+  if (lineFreq) return lineFreq[period];
+  return freqData.default[period];
+}
+
+function calculateTimes(path, lineSegments, startMinutes) {
+  // startMinutes = minutes since midnight (e.g., 8:30 = 510)
+  // Returns array of {depTime, arrTime} per segment, plus total arrival
+  const segTimes = [];
+  let currentTime = startMinutes;
+
+  for (let si = 0; si < lineSegments.length; si++) {
+    const seg = lineSegments[si];
+    const stationCount = seg.to - seg.from;
+
+    // Wait for next train (half the frequency on average)
+    const hour = Math.floor(currentTime / 60) % 24;
+    const freq = getFrequency(seg.line, hour);
+    const waitTime = si === 0 ? 0 : Math.round(freq / 2); // No wait for first segment
+
+    const depTime = currentTime + waitTime;
+    // Travel time: ~2.5 min per station
+    const travelTime = stationCount * 2.5;
+    const arrTime = depTime + travelTime;
+
+    segTimes.push({
+      depTime: Math.round(depTime),
+      arrTime: Math.round(arrTime),
+      waitTime,
+      travelTime: Math.round(travelTime),
+    });
+
+    currentTime = arrTime;
+    // Add transfer walking time (3 min)
+    if (si < lineSegments.length - 1) {
+      currentTime += 3;
+    }
+  }
+
+  return segTimes;
+}
+
+function formatTime(minutes) {
+  const h = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  return `${String(h).padStart(2,'0')}:${String(Math.round(m)).padStart(2,'0')}`;
+}
+
+function getSearchTime() {
+  const type = document.getElementById('time-type').value;
+  const timeInput = document.getElementById('time-input').value;
+
+  if (type === 'now' || !timeInput) {
+    const now = new Date();
+    return { type: 'dep', minutes: now.getHours() * 60 + now.getMinutes() };
+  }
+
+  const [h, m] = timeInput.split(':').map(Number);
+  return { type, minutes: h * 60 + m };
+}
+
 // Line color hash for visual distinction
 const LINE_COLORS = [
   '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c',
@@ -843,25 +962,25 @@ function lineColor(name) {
 }
 
 // === Rendering ===
-function renderOneRoute(result, index) {
+function renderOneRoute(result, index, searchTime) {
   const { path, distance } = result;
   const lineSegments = detectLineSegments(path);
 
-  const totalStations = path.length - 1;
+  // Calculate times
+  const segTimes = calculateTimes(path, lineSegments, searchTime.minutes);
+  const depTimeStr = formatTime(segTimes[0].depTime);
+  const arrTimeStr = formatTime(segTimes[segTimes.length - 1].arrTime);
+  const totalMin = Math.round(segTimes[segTimes.length - 1].arrTime - segTimes[0].depTime);
   const transferCount = lineSegments.length - 1;
-  const rideMin = totalStations * 2.5;
-  const transferMin = transferCount * 5;
-  const totalMin = Math.max(1, Math.round(rideMin + transferMin));
 
   const routeId = 'route-' + index;
   let html = `<div class="route-card">`;
 
   // Summary (clickable to toggle detail)
   html += `<div class="route-summary" onclick="toggleRoute('${routeId}')" style="cursor:pointer">
-    <span class="time">約${totalMin}分</span>
-    <div class="meta">
-      <div>${transferCount > 0 ? transferCount + '回乗換' : '直通'} / ${(distance/1000).toFixed(1)}km</div>
-      <div>${path.length}駅</div>
+    <div>
+      <div style="font-size:20px;font-weight:700;color:var(--blue)">${depTimeStr} → ${arrTimeStr}</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${transferCount > 0 ? transferCount + '回乗換' : '直通'} / ${(distance/1000).toFixed(1)}km</div>
     </div>
   </div>`;
 
@@ -895,16 +1014,20 @@ function renderOneRoute(result, index) {
                      seg.line === '_walk' ? '徒歩' : seg.line;
     const color = lineColor(seg.line);
 
+    const st = segTimes[si];
+    const depT = formatTime(st.depTime);
+    const arrT = formatTime(st.arrTime);
+
     html += `<div class="step">
       <div class="step-line">
         <div class="step-dot" style="background:${color};box-shadow:0 0 0 2px ${color}"></div>
         <div class="step-bar" style="background:${color}"></div>
       </div>
       <div class="step-content">
-        <div class="step-station">${fromStn.n}</div>
+        <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${depT}</span>${fromStn.n}</div>
         <div class="step-info">
           <span class="line-tag" style="background:${color}11;color:${color}">${lineName}</span>
-          ${stationCount}駅
+          ${stationCount}駅 ${st.travelTime}分${st.waitTime > 0 ? ` <span style="color:var(--orange)">(待${st.waitTime}分)</span>` : ''}
         </div>
       </div>
     </div>`;
@@ -916,7 +1039,7 @@ function renderOneRoute(result, index) {
           <div class="step-bar none"></div>
         </div>
         <div class="step-content">
-          <div class="step-station">${toStn.n}</div>
+          <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${arrT}</span>${toStn.n}</div>
           <div class="step-info">到着</div>
         </div>
       </div>`;
@@ -929,12 +1052,13 @@ function renderOneRoute(result, index) {
 }
 
 function renderMultipleResults(routes) {
+  const searchTime = getSearchTime();
   let html = '';
   if (routes.length > 1) {
     html += `<div style="padding:4px 16px 0;font-size:13px;color:var(--muted)">${routes.length}件の経路</div>`;
   }
   for (let i = 0; i < routes.length; i++) {
-    html += renderOneRoute(routes[i], i);
+    html += renderOneRoute(routes[i], i, searchTime);
   }
   document.getElementById('results').innerHTML = html;
 }

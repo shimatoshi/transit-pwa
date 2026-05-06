@@ -1,0 +1,77 @@
+{
+  "_doc": "路線別運行間隔(分)。rush=7-9,17-19時, day=9-17時, night=19-23時, early=5-7時",
+  "default": {"rush": 10, "day": 15, "night": 20, "early": 30},
+  "lines": {
+    "山手線": {"rush": 2, "day": 4, "night": 5, "early": 8},
+    "京浜東北線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "中央線快速": {"rush": 2, "day": 4, "night": 6, "early": 10},
+    "中央・総武緩行線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "東海道本線": {"rush": 5, "day": 10, "night": 15, "early": 20},
+    "JR東海道本線": {"rush": 5, "day": 10, "night": 15, "early": 20},
+    "東海道新幹線": {"rush": 5, "day": 10, "night": 15, "early": 30},
+    "総武本線": {"rush": 4, "day": 7, "night": 10, "early": 15},
+    "常磐線": {"rush": 4, "day": 8, "night": 12, "early": 15},
+    "東北本線": {"rush": 5, "day": 10, "night": 15, "early": 20},
+    "埼京線": {"rush": 3, "day": 6, "night": 8, "early": 10},
+    "武蔵野線": {"rush": 5, "day": 8, "night": 12, "early": 15},
+    "横須賀線": {"rush": 5, "day": 8, "night": 12, "early": 15},
+    "湘南新宿ライン": {"rush": 7, "day": 12, "night": 15, "early": 20},
+    "南武線": {"rush": 4, "day": 7, "night": 10, "early": 15},
+    "京葉線": {"rush": 4, "day": 7, "night": 10, "early": 15},
+
+    "東京メトロ銀座線": {"rush": 2, "day": 3, "night": 5, "early": 8},
+    "東京メトロ丸ノ内線": {"rush": 2, "day": 4, "night": 5, "early": 8},
+    "東京メトロ日比谷線": {"rush": 3, "day": 4, "night": 6, "early": 8},
+    "東京メトロ東西線": {"rush": 2, "day": 4, "night": 6, "early": 8},
+    "東京メトロ千代田線": {"rush": 2, "day": 4, "night": 6, "early": 8},
+    "東京メトロ有楽町線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "東京メトロ半蔵門線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "東京メトロ南北線": {"rush": 4, "day": 6, "night": 8, "early": 10},
+    "東京メトロ副都心線": {"rush": 4, "day": 6, "night": 8, "early": 10},
+
+    "都営地下鉄浅草線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "都営地下鉄三田線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "都営地下鉄新宿線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "都営地下鉄大江戸線": {"rush": 4, "day": 5, "night": 7, "early": 10},
+
+    "東急東横線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "東急田園都市線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "東急池上線": {"rush": 5, "day": 7, "night": 10, "early": 12},
+    "東急目黒線": {"rush": 4, "day": 6, "night": 8, "early": 12},
+
+    "京王線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "京王井の頭線": {"rush": 4, "day": 5, "night": 7, "early": 10},
+
+    "小田急小田原線": {"rush": 3, "day": 6, "night": 8, "early": 12},
+    "西武池袋線": {"rush": 4, "day": 7, "night": 10, "early": 12},
+    "西武新宿線": {"rush": 4, "day": 7, "night": 10, "early": 12},
+
+    "東武東上線": {"rush": 4, "day": 7, "night": 10, "early": 12},
+    "東武伊勢崎線": {"rush": 4, "day": 7, "night": 10, "early": 12},
+    "東武野田線": {"rush": 5, "day": 10, "night": 12, "early": 15},
+
+    "京成本線": {"rush": 5, "day": 10, "night": 12, "early": 15},
+    "京成押上線": {"rush": 5, "day": 8, "night": 10, "early": 15},
+    "京成成田空港線": {"rush": 7, "day": 12, "night": 15, "early": 20},
+
+    "北総鉄道北総線": {"rush": 7, "day": 12, "night": 15, "early": 20},
+    "京成松戸線": {"rush": 7, "day": 12, "night": 15, "early": 20},
+
+    "京急本線": {"rush": 3, "day": 6, "night": 8, "early": 10},
+    "京浜急行電鉄本線": {"rush": 3, "day": 6, "night": 8, "early": 10},
+
+    "相鉄本線": {"rush": 5, "day": 8, "night": 10, "early": 15},
+
+    "大阪メトロ御堂筋線": {"rush": 2, "day": 4, "night": 6, "early": 8},
+    "大阪メトロ谷町線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "阪急神戸線": {"rush": 4, "day": 7, "night": 10, "early": 12},
+    "阪急京都線": {"rush": 4, "day": 7, "night": 10, "early": 12},
+    "阪神本線": {"rush": 5, "day": 8, "night": 10, "early": 15},
+
+    "名古屋市営地下鉄東山線": {"rush": 3, "day": 5, "night": 7, "early": 10},
+    "名古屋市営地下鉄名城線": {"rush": 4, "day": 6, "night": 8, "early": 12},
+
+    "福岡市地下鉄空港線": {"rush": 4, "day": 7, "night": 10, "early": 12},
+    "札幌市営地下鉄南北線": {"rush": 4, "day": 7, "night": 10, "early": 12}
+  }
+}

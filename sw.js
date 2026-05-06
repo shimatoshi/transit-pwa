@@ -1,8 +1,9 @@
-const CACHE_NAME = 'transit-v4';
+const CACHE_NAME = 'transit-v5';
 const ASSETS = [
   './',
   './index.html',
   './graph.json',
+  './frequency.json',
   './manifest.json',
 ];
 
