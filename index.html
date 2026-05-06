@@ -528,8 +528,8 @@ function swapDepArr() {
   selectedStations[arrInput.dataset.fieldId] = tmpId;
 }
 
-// === Dijkstra ===
-function dijkstra(startId, endId) {
+// === Dijkstra with optional banned edges ===
+function dijkstra(startId, endId, bannedEdges) {
   const n = graph.stations.length;
   const dist = new Float64Array(n).fill(Infinity);
   const prev = new Int32Array(n).fill(-1);
@@ -537,7 +537,6 @@ function dijkstra(startId, endId) {
   const visited = new Uint8Array(n);
   dist[startId] = 0;
 
-  // Binary heap
   const heap = [[0, startId]];
   function push(d, v) {
     heap.push([d, v]);
@@ -578,11 +577,14 @@ function dijkstra(startId, endId) {
 
     for (const [v, w, line] of neighbors) {
       if (visited[v]) continue;
+      // Check banned edges
+      if (bannedEdges && bannedEdges.has(u + ':' + v)) continue;
+
       // Transfer penalty
       let penalty = 0;
       if (prev[u] !== -1 && prevEdgeLine[u] && prevEdgeLine[u] !== '_rail' &&
           line !== prevEdgeLine[u] && line !== '_rail') {
-        penalty = 500; // ~5min equivalent
+        penalty = 500;
       }
       const nd = d + w + penalty;
       if (nd < dist[v]) {
@@ -605,6 +607,70 @@ function dijkstra(startId, endId) {
   return { path, distance: dist[endId] };
 }
 
+// === Find K alternative routes ===
+// Uses edge-penalty method: after finding shortest path,
+// penalize its edges and search again for a different route
+function findKRoutes(startId, endId, k = 3) {
+  const routes = [];
+  const usedEdgeSets = [];
+
+  // First: shortest path with no bans
+  const first = dijkstra(startId, endId, null);
+  if (!first) return routes;
+  routes.push(first);
+
+  // Extract path signature (set of line segments) to check uniqueness
+  function routeSignature(route) {
+    const segs = detectLineSegments(route.path);
+    return segs.map(s => s.line).join('|');
+  }
+  const seenSignatures = new Set([routeSignature(first)]);
+
+  // Try banning different portions of previous routes
+  for (let attempt = 0; attempt < k * 4 && routes.length < k; attempt++) {
+    const sourceRoute = routes[attempt % routes.length];
+    const pathIds = sourceRoute.path.map(p => p.id);
+
+    // Ban edges around a "spur point" — a station partway through the route
+    // Each attempt uses a different spur point
+    const spurIdx = Math.floor((attempt / routes.length + 1) * pathIds.length / (k * 2));
+    if (spurIdx <= 0 || spurIdx >= pathIds.length - 1) continue;
+
+    const banned = new Set();
+    // Ban the edge at the spur point from all found routes
+    for (const r of routes) {
+      const rIds = r.path.map(p => p.id);
+      for (let i = 0; i < rIds.length - 1; i++) {
+        // Ban edges that share the prefix up to the spur
+        if (i < spurIdx && i < pathIds.length - 1 && rIds[i] === pathIds[i]) {
+          continue; // Same prefix, don't ban yet
+        }
+        if (i >= spurIdx - 1 && i < spurIdx + 2 && i < rIds.length - 1) {
+          banned.add(rIds[i] + ':' + rIds[i + 1]);
+          banned.add(rIds[i + 1] + ':' + rIds[i]);
+        }
+      }
+    }
+
+    const alt = dijkstra(startId, endId, banned);
+    if (!alt) continue;
+
+    // Check the route is meaningfully different
+    const sig = routeSignature(alt);
+    if (seenSignatures.has(sig)) continue;
+
+    // Check distance isn't absurdly longer (max 2x the shortest)
+    if (alt.distance > first.distance * 2.5) continue;
+
+    seenSignatures.add(sig);
+    routes.push(alt);
+  }
+
+  // Sort by distance
+  routes.sort((a, b) => a.distance - b.distance);
+  return routes;
+}
+
 // Find all station IDs matching a name exactly
 function findAllByName(name) {
   const ids = [];
@@ -617,7 +683,7 @@ function findAllByName(name) {
 // === Search ===
 function doSearch() {
   const rows = document.querySelectorAll('.field-row');
-  const waypointCandidates = []; // each element is array of candidate station IDs
+  const waypointCandidates = [];
 
   for (const row of rows) {
     const input = row.querySelector('input');
@@ -633,12 +699,10 @@ function doSearch() {
         }
         continue;
       }
-      // Find all stations with this exact name
       const allIds = findAllByName(text);
       if (allIds.length > 0) {
         waypointCandidates.push(allIds);
       } else {
-        // Fuzzy: try first autocomplete match
         const matches = searchStations(text);
         if (matches.length > 0) {
           const name = matches[0].name;
@@ -650,7 +714,6 @@ function doSearch() {
         }
       }
     } else {
-      // User selected a specific station, but also include same-name alternatives
       const name = graph.stations[sid].n;
       const allIds = findAllByName(name);
       waypointCandidates.push(allIds.length > 1 ? allIds : [sid]);
@@ -662,43 +725,67 @@ function doSearch() {
     return;
   }
 
-  // For each segment, try all combinations of candidates and pick shortest
-  let totalPath = [];
-  let totalDist = 0;
-  let failed = false;
-
-  for (let i = 0; i < waypointCandidates.length - 1; i++) {
-    const fromCandidates = waypointCandidates[i];
-    const toCandidates = waypointCandidates[i + 1];
-
-    let bestResult = null;
-    for (const fid of fromCandidates) {
-      for (const tid of toCandidates) {
+  // For direct (no via) routes, find multiple alternatives
+  if (waypointCandidates.length === 2) {
+    const allRoutes = [];
+    for (const fid of waypointCandidates[0]) {
+      for (const tid of waypointCandidates[1]) {
         if (fid === tid) continue;
-        const result = dijkstra(fid, tid);
-        if (result && (!bestResult || result.distance < bestResult.distance)) {
-          bestResult = result;
-        }
+        const routes = findKRoutes(fid, tid, 3);
+        allRoutes.push(...routes);
       }
     }
-
-    if (!bestResult) {
-      const fn = graph.stations[fromCandidates[0]].n;
-      const tn = graph.stations[toCandidates[0]].n;
+    // Deduplicate and sort
+    allRoutes.sort((a, b) => a.distance - b.distance);
+    const unique = [];
+    const sigs = new Set();
+    for (const r of allRoutes) {
+      const sig = r.path.map(p => p.id).join(',');
+      if (!sigs.has(sig) && unique.length < 3) {
+        sigs.add(sig);
+        unique.push(r);
+      }
+    }
+    if (unique.length === 0) {
+      const fn = graph.stations[waypointCandidates[0][0]].n;
+      const tn = graph.stations[waypointCandidates[1][0]].n;
       document.getElementById('results').innerHTML =
         `<div class="no-route">${fn} → ${tn} の経路が見つかりません</div>`;
       return;
     }
+    renderMultipleResults(unique);
+  } else {
+    // Via route: single best path through all waypoints
+    let totalPath = [];
+    let totalDist = 0;
 
-    if (totalPath.length > 0) {
-      totalPath = totalPath.concat(bestResult.path.slice(1));
-    } else {
-      totalPath = bestResult.path;
+    for (let i = 0; i < waypointCandidates.length - 1; i++) {
+      const fromC = waypointCandidates[i];
+      const toC = waypointCandidates[i + 1];
+      let bestResult = null;
+      for (const fid of fromC) {
+        for (const tid of toC) {
+          if (fid === tid) continue;
+          const result = dijkstra(fid, tid, null);
+          if (result && (!bestResult || result.distance < bestResult.distance)) {
+            bestResult = result;
+          }
+        }
+      }
+      if (!bestResult) {
+        document.getElementById('results').innerHTML =
+          `<div class="no-route">経路が見つかりません</div>`;
+        return;
+      }
+      if (totalPath.length > 0) {
+        totalPath = totalPath.concat(bestResult.path.slice(1));
+      } else {
+        totalPath = bestResult.path;
+      }
+      totalDist += bestResult.distance;
     }
-    totalDist += bestResult.distance;
+    renderMultipleResults([{ path: totalPath, distance: totalDist }]);
   }
-
-  renderResults({ path: totalPath, distance: totalDist });
 }
 
 // === Detect line segments using station line membership ===
@@ -756,21 +843,21 @@ function lineColor(name) {
 }
 
 // === Rendering ===
-function renderResults(result) {
+function renderOneRoute(result, index) {
   const { path, distance } = result;
   const lineSegments = detectLineSegments(path);
 
-  // Time estimate: ~2.5 min per station, +5 min per transfer
   const totalStations = path.length - 1;
   const transferCount = lineSegments.length - 1;
   const rideMin = totalStations * 2.5;
   const transferMin = transferCount * 5;
   const totalMin = Math.max(1, Math.round(rideMin + transferMin));
 
+  const routeId = 'route-' + index;
   let html = `<div class="route-card">`;
 
-  // Summary
-  html += `<div class="route-summary">
+  // Summary (clickable to toggle detail)
+  html += `<div class="route-summary" onclick="toggleRoute('${routeId}')" style="cursor:pointer">
     <span class="time">約${totalMin}分</span>
     <div class="meta">
       <div>${transferCount > 0 ? transferCount + '回乗換' : '直通'} / ${(distance/1000).toFixed(1)}km</div>
@@ -778,8 +865,24 @@ function renderResults(result) {
     </div>
   </div>`;
 
-  // Detail
-  html += `<div class="route-detail" id="route-detail">`;
+  // Line summary bar (mini colored line showing route composition)
+  html += `<div style="display:flex;height:4px;margin:0 16px 8px;border-radius:2px;overflow:hidden">`;
+  for (const seg of lineSegments) {
+    const pct = ((seg.to - seg.from) / totalStations * 100).toFixed(1);
+    html += `<div style="width:${pct}%;background:${lineColor(seg.line)}"></div>`;
+  }
+  html += `</div>`;
+
+  // Route line names summary
+  const lineNames = lineSegments.map(s => {
+    const n = s.line === '_rail' ? '鉄道' : s.line;
+    return `<span class="line-tag" style="background:${lineColor(s.line)}11;color:${lineColor(s.line)};margin:2px">${n}</span>`;
+  }).join('→');
+  html += `<div style="padding:0 16px 10px;font-size:12px;line-height:1.8">${lineNames}</div>`;
+
+  // Detail (collapsed by default for 2nd+ routes)
+  const collapsed = index > 0 ? ' collapsed' : '';
+  html += `<div class="route-detail${collapsed}" id="${routeId}">`;
 
   for (let si = 0; si < lineSegments.length; si++) {
     const seg = lineSegments[si];
@@ -792,7 +895,6 @@ function renderResults(result) {
                      seg.line === '_walk' ? '徒歩' : seg.line;
     const color = lineColor(seg.line);
 
-    // Departure station of this segment
     html += `<div class="step">
       <div class="step-line">
         <div class="step-dot" style="background:${color};box-shadow:0 0 0 2px ${color}"></div>
@@ -807,7 +909,6 @@ function renderResults(result) {
       </div>
     </div>`;
 
-    // Arrival station (only for last segment)
     if (isLast) {
       html += `<div class="step">
         <div class="step-line">
@@ -822,66 +923,30 @@ function renderResults(result) {
     }
   }
 
-  html += `</div>`;
+  html += `</div>`; // route-detail
+  html += `</div>`; // route-card
+  return html;
+}
 
-  // Toggle
-  html += `<div class="toggle-detail" onclick="toggleDetail()">
-    <span id="toggle-text">詳細を隠す</span>
-  </div>`;
-  html += `</div>`;
-
-  // All stations (expandable)
-  html += `<div class="route-card" id="all-stations-card" style="display:none">
-    <div class="route-summary" onclick="toggleAllStations()" style="cursor:pointer">
-      <span style="font-size:14px;font-weight:600;color:var(--text)">全停車駅</span>
-      <div class="meta" id="all-stations-toggle">表示する</div>
-    </div>
-    <div id="all-stations-list" style="display:none;padding:12px 16px;font-size:13px;line-height:2;color:var(--text)"></div>
-  </div>`;
-
-  document.getElementById('results').innerHTML = html;
-
-  if (path.length > 2) {
-    document.getElementById('all-stations-card').style.display = '';
-    // Show with line segment markers
-    let stationsHtml = '';
-    for (const seg of lineSegments) {
-      const color = lineColor(seg.line);
-      const ln = seg.line === '_rail' ? '鉄道' : seg.line;
-      stationsHtml += `<div style="margin:4px 0 2px;font-size:11px;color:${color};font-weight:600">${ln}</div>`;
-      for (let i = seg.from; i <= seg.to; i++) {
-        const n = graph.stations[path[i].id].n;
-        const bold = (i === 0 || i === path.length - 1 || i === seg.from || i === seg.to);
-        stationsHtml += `<span style="${bold ? 'font-weight:600' : ''}">${n}</span>`;
-        if (i < seg.to) stationsHtml += ' → ';
-      }
-    }
-    document.getElementById('all-stations-list').innerHTML = stationsHtml;
+function renderMultipleResults(routes) {
+  let html = '';
+  if (routes.length > 1) {
+    html += `<div style="padding:4px 16px 0;font-size:13px;color:var(--muted)">${routes.length}件の経路</div>`;
   }
+  for (let i = 0; i < routes.length; i++) {
+    html += renderOneRoute(routes[i], i);
+  }
+  document.getElementById('results').innerHTML = html;
+}
+
+function toggleRoute(routeId) {
+  const el = document.getElementById(routeId);
+  if (!el) return;
+  el.classList.toggle('collapsed');
 }
 
 function toggleDetail() {
-  const el = document.getElementById('route-detail');
-  const text = document.getElementById('toggle-text');
-  if (el.classList.contains('collapsed')) {
-    el.classList.remove('collapsed');
-    text.textContent = '詳細を隠す';
-  } else {
-    el.classList.add('collapsed');
-    text.textContent = '詳細を表示';
-  }
-}
-
-function toggleAllStations() {
-  const el = document.getElementById('all-stations-list');
-  const text = document.getElementById('all-stations-toggle');
-  if (el.style.display === 'none') {
-    el.style.display = '';
-    text.textContent = '隠す';
-  } else {
-    el.style.display = 'none';
-    text.textContent = '表示する';
-  }
+  // Legacy, kept for compatibility
 }
 
 // === Service Worker ===
