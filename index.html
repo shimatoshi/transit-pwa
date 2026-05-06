@@ -698,49 +698,71 @@ function doSearch() {
   renderResults({ path: totalPath, distance: totalDist });
 }
 
-// === Rendering ===
-function renderResults(result) {
-  const { path, distance } = result;
-
-  // Collapse into segments by line
-  const lineSegments = [];
+// === Detect line segments using station line membership ===
+function detectLineSegments(path) {
+  // For each pair of consecutive stations, find the shared line.
+  // When the shared line changes, that's a transfer.
+  const segments = []; // {lineName, from, to}
   let currentLine = '';
   let segStart = 0;
 
   for (let i = 1; i < path.length; i++) {
-    const line = path[i].line;
-    if (line !== currentLine && i > 1) {
-      lineSegments.push({ line: currentLine, from: segStart, to: i - 1 });
+    const prevStn = graph.stations[path[i-1].id];
+    const currStn = graph.stations[path[i].id];
+
+    // Find shared lines between two adjacent stations
+    const prevLines = new Set(prevStn.l || []);
+    const currLines = currStn.l || [];
+    const shared = currLines.filter(l => prevLines.has(l));
+
+    // Also check edge line
+    const edgeLine = path[i].line;
+    let bestLine = '_rail';
+
+    if (shared.length > 0) {
+      // Prefer continuing the same line if possible
+      if (currentLine && shared.includes(currentLine)) {
+        bestLine = currentLine;
+      } else {
+        bestLine = shared[0];
+      }
+    } else if (edgeLine && edgeLine !== '_rail') {
+      bestLine = edgeLine;
+    }
+
+    if (bestLine !== currentLine && i > 1) {
+      segments.push({ line: currentLine, from: segStart, to: i - 1 });
       segStart = i - 1;
     }
-    currentLine = line;
+    currentLine = bestLine;
   }
-  lineSegments.push({ line: currentLine, from: segStart, to: path.length - 1 });
+  segments.push({ line: currentLine, from: segStart, to: path.length - 1 });
 
-  // Compute time estimate
-  // Rail: ~60km/h average (includes stops) = 1000m/min
-  // Walk/transfer: ~80m/min
-  let totalMin = 0;
-  for (const seg of lineSegments) {
-    let segDist = 0;
-    for (let i = seg.from + 1; i <= seg.to; i++) {
-      const fromId = path[i-1].id;
-      const toId = path[i].id;
-      const edges = graph.edges[fromId];
-      if (edges) {
-        const e = edges.find(e => e[0] === toId);
-        if (e) segDist += e[1];
-      }
-    }
-    totalMin += segDist / 1000; // ~1km/min for rail
-  }
-  totalMin = Math.max(1, Math.round(totalMin));
+  return segments;
+}
 
-  const transfers = lineSegments.filter(s =>
-    s.line !== '_rail' && s.line !== '_transfer' && s.line !== '_walk'
-  ).length;
-  const railTransfers = Math.max(0, transfers - 1);
-  const totalTransfers = lineSegments.length - 1;
+// Line color hash for visual distinction
+const LINE_COLORS = [
+  '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c',
+  '#0891b2', '#be185d', '#4f46e5', '#ca8a04', '#059669',
+];
+function lineColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  return LINE_COLORS[Math.abs(hash) % LINE_COLORS.length];
+}
+
+// === Rendering ===
+function renderResults(result) {
+  const { path, distance } = result;
+  const lineSegments = detectLineSegments(path);
+
+  // Time estimate: ~2.5 min per station, +5 min per transfer
+  const totalStations = path.length - 1;
+  const transferCount = lineSegments.length - 1;
+  const rideMin = totalStations * 2.5;
+  const transferMin = transferCount * 5;
+  const totalMin = Math.max(1, Math.round(rideMin + transferMin));
 
   let html = `<div class="route-card">`;
 
@@ -748,12 +770,12 @@ function renderResults(result) {
   html += `<div class="route-summary">
     <span class="time">約${totalMin}分</span>
     <div class="meta">
-      <div>${totalTransfers > 0 ? totalTransfers + '回乗換' : '直通'} / ${(distance/1000).toFixed(1)}km</div>
+      <div>${transferCount > 0 ? transferCount + '回乗換' : '直通'} / ${(distance/1000).toFixed(1)}km</div>
       <div>${path.length}駅</div>
     </div>
   </div>`;
 
-  // Detail (collapsible)
+  // Detail
   html += `<div class="route-detail" id="route-detail">`;
 
   for (let si = 0; si < lineSegments.length; si++) {
@@ -762,30 +784,27 @@ function renderResults(result) {
     const toStn = graph.stations[path[seg.to].id];
     const isLast = si === lineSegments.length - 1;
     const stationCount = seg.to - seg.from;
-    const isRail = seg.line !== '_transfer' && seg.line !== '_walk';
     const lineName = seg.line === '_rail' ? '鉄道' :
                      seg.line === '_transfer' ? '乗換' :
                      seg.line === '_walk' ? '徒歩' : seg.line;
+    const color = lineColor(seg.line);
 
-    const barClass = isRail ? 'rail' : (seg.line === '_walk' ? 'walk' : 'transfer');
-    const dotClass = isRail ? '' : (seg.line === '_walk' ? 'walk' : 'transfer');
-
-    // Start station + line info
+    // Departure station of this segment
     html += `<div class="step">
       <div class="step-line">
-        <div class="step-dot ${dotClass}"></div>
-        <div class="step-bar ${barClass}"></div>
+        <div class="step-dot" style="background:${color};box-shadow:0 0 0 2px ${color}"></div>
+        <div class="step-bar" style="background:${color}"></div>
       </div>
       <div class="step-content">
         <div class="step-station">${fromStn.n}</div>
         <div class="step-info">
-          <span class="line-tag">${lineName}</span>
-          ${isRail ? ` ${stationCount}駅` : ''}
+          <span class="line-tag" style="background:${color}11;color:${color}">${lineName}</span>
+          ${stationCount}駅
         </div>
       </div>
     </div>`;
 
-    // Last segment: show arrival station
+    // Arrival station (only for last segment)
     if (isLast) {
       html += `<div class="step">
         <div class="step-line">
@@ -800,16 +819,15 @@ function renderResults(result) {
     }
   }
 
-  html += `</div>`; // route-detail
+  html += `</div>`;
 
   // Toggle
   html += `<div class="toggle-detail" onclick="toggleDetail()">
     <span id="toggle-text">詳細を隠す</span>
   </div>`;
+  html += `</div>`;
 
-  html += `</div>`; // route-card
-
-  // Show all intermediate stations (expandable)
+  // All stations (expandable)
   html += `<div class="route-card" id="all-stations-card" style="display:none">
     <div class="route-summary" onclick="toggleAllStations()" style="cursor:pointer">
       <span style="font-size:14px;font-weight:600;color:var(--text)">全停車駅</span>
@@ -820,15 +838,22 @@ function renderResults(result) {
 
   document.getElementById('results').innerHTML = html;
 
-  // Build all-stations list
   if (path.length > 2) {
     document.getElementById('all-stations-card').style.display = '';
-    const allNames = path.map(p => graph.stations[p.id].n);
-    document.getElementById('all-stations-list').innerHTML =
-      allNames.map((n, i) => {
-        const weight = (i === 0 || i === allNames.length - 1) ? 'font-weight:600' : '';
-        return `<span style="${weight}">${n}</span>`;
-      }).join(' → ');
+    // Show with line segment markers
+    let stationsHtml = '';
+    for (const seg of lineSegments) {
+      const color = lineColor(seg.line);
+      const ln = seg.line === '_rail' ? '鉄道' : seg.line;
+      stationsHtml += `<div style="margin:4px 0 2px;font-size:11px;color:${color};font-weight:600">${ln}</div>`;
+      for (let i = seg.from; i <= seg.to; i++) {
+        const n = graph.stations[path[i].id].n;
+        const bold = (i === 0 || i === path.length - 1 || i === seg.from || i === seg.to);
+        stationsHtml += `<span style="${bold ? 'font-weight:600' : ''}">${n}</span>`;
+        if (i < seg.to) stationsHtml += ' → ';
+      }
+    }
+    document.getElementById('all-stations-list').innerHTML = stationsHtml;
   }
 }
 
