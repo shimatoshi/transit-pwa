@@ -1231,10 +1231,52 @@ function toggleDetail() {
   // Legacy, kept for compatibility
 }
 
-// === Service Worker ===
+// === Service Worker + Offline ===
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js');
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const newSW = reg.installing;
+      newSW.addEventListener('statechange', () => {
+        if (newSW.state === 'activated') {
+          document.getElementById('status').textContent += ' (更新完了)';
+        }
+      });
+    });
+  });
+
+  // Request persistent storage
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().then(granted => {
+      if (granted) {
+        console.log('Persistent storage granted');
+      } else {
+        console.log('Persistent storage denied - cache may be evicted');
+      }
+    });
+  }
+
+  // Check offline readiness
+  window.addEventListener('load', async () => {
+    if ('caches' in window) {
+      const cache = await caches.open('transit-v7');
+      const keys = await cache.keys();
+      const statusEl = document.getElementById('status');
+      if (keys.length >= 4) { // index.html + graph.json + frequency.json + through_service.json minimum
+        statusEl.textContent = statusEl.textContent.replace('オフライン対応', 'オフライン準備完了');
+        statusEl.style.color = '#16a34a';
+      }
+    }
+  });
 }
+
+// Online/offline indicator
+window.addEventListener('online', () => {
+  document.getElementById('status').style.color = '';
+});
+window.addEventListener('offline', () => {
+  document.getElementById('status').textContent = 'オフラインモード';
+  document.getElementById('status').style.color = '#ea580c';
+});
 </script>
 </body>
 </html>

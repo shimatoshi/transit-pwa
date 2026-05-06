@@ -8,6 +8,8 @@ const ASSETS = [
   './train_types.json',
   './fares.json',
   './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
 self.addEventListener('install', e => {
@@ -26,15 +28,21 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// Network-first: try network, fall back to cache (ensures updates are picked up)
+// Network-first with cache fallback (ensures updates are picked up when online)
 self.addEventListener('fetch', e => {
   e.respondWith(
     fetch(e.request)
       .then(resp => {
-        const clone = resp.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+        // Cache successful responses
+        if (resp.ok) {
+          const clone = resp.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+        }
         return resp;
       })
-      .catch(() => caches.match(e.request))
+      .catch(() => {
+        // Offline: serve from cache
+        return caches.match(e.request).then(r => r || new Response('Offline', { status: 503 }));
+      })
   );
 });
