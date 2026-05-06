@@ -2,7 +2,7 @@
   "_doc": "路線別の列車種別と駅間所要時間係数。speed_factor: 1.0=各停(2.5min/駅), 0.5=快速(1.25min/駅)等",
   "types": {
     "常磐線": [
-      {"type": "快速", "speed_factor": 0.6, "note": "松戸-北千住間ノンストップ等"},
+      {"type": "快速", "speed_factor": 0.45, "note": "上野-我孫子30分(40km), 快速は駅数少ない"},
       {"type": "各停", "speed_factor": 1.0}
     ],
     "東海道本線": [
@@ -46,8 +46,8 @@
       {"type": "普通", "speed_factor": 0.8}
     ],
     "京成本線": [
-      {"type": "特急", "speed_factor": 0.4},
-      {"type": "快速", "speed_factor": 0.6},
+      {"type": "特急", "speed_factor": 0.65, "note": "各駅エッジベースなので特急でも0.65程度が実態"},
+      {"type": "快速", "speed_factor": 0.8},
       {"type": "普通", "speed_factor": 1.0}
     ],
     "京成押上線": [
