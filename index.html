@@ -985,9 +985,10 @@ function renderOneRoute(result, index, searchTime) {
   </div>`;
 
   // Line summary bar (mini colored line showing route composition)
+  const totalStops = path.length - 1;
   html += `<div style="display:flex;height:4px;margin:0 16px 8px;border-radius:2px;overflow:hidden">`;
   for (const seg of lineSegments) {
-    const pct = ((seg.to - seg.from) / totalStations * 100).toFixed(1);
+    const pct = ((seg.to - seg.from) / totalStops * 100).toFixed(1);
     html += `<div style="width:${pct}%;background:${lineColor(seg.line)}"></div>`;
   }
   html += `</div>`;
