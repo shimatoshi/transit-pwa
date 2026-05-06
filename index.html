@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>乗換案内</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f172a">
+<style>
+:root {
+  --blue: #2563eb;
+  --blue-dark: #1d4ed8;
+  --bg: #f1f5f9;
+  --card: #fff;
+  --text: #1e293b;
+  --muted: #94a3b8;
+  --border: #e2e8f0;
+  --green: #16a34a;
+  --orange: #ea580c;
+  --red: #dc2626;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Header */
+.header {
+  background: linear-gradient(135deg, #0f172a, #1e3a5f);
+  color: white;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header svg { width: 22px; height: 22px; }
+.header h1 { font-size: 17px; font-weight: 600; }
+.header .badge {
+  margin-left: auto;
+  font-size: 10px;
+  background: rgba(255,255,255,0.15);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+/* Search Card */
+.search-card {
+  background: var(--card);
+  margin: 12px;
+  border-radius: 14px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  overflow: hidden;
+}
+.station-fields {
+  padding: 12px 12px 0;
+}
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  position: relative;
+}
+.field-label {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: white;
+  flex-shrink: 0;
+}
+.field-label.dep { background: var(--green); }
+.field-label.via { background: var(--orange); }
+.field-label.arr { background: var(--red); }
+.field-input {
+  flex: 1;
+  position: relative;
+}
+.field-input input {
+  width: 100%;
+  padding: 9px 32px 9px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 15px;
+  outline: none;
+  background: #f8fafc;
+  transition: border-color 0.15s;
+}
+.field-input input:focus {
+  border-color: var(--blue);
+  background: white;
+}
+.field-input input::placeholder { color: var(--muted); }
+.field-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: #cbd5e1;
+  color: white;
+  border-radius: 50%;
+  font-size: 12px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.field-input input:not(:placeholder-shown) ~ .field-clear { display: flex; }
+.remove-via {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 20px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Autocomplete */
+.ac-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0; right: 0;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 50;
+  display: none;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  margin-top: 4px;
+}
+.ac-dropdown.show { display: block; }
+.ac-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f8fafc;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ac-item:active { background: #eff6ff; }
+.ac-item .ac-name { font-size: 14px; font-weight: 500; }
+.ac-item .ac-sub { font-size: 11px; color: var(--muted); }
+
+/* Controls row */
+.controls {
+  display: flex;
+  padding: 8px 12px;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+}
+.add-via-btn {
+  font-size: 13px;
+  color: var(--blue);
+  background: none;
+  border: 1px dashed var(--blue);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.swap-btn {
+  font-size: 13px;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  margin-left: auto;
+}
+.search-btn {
+  width: 100%;
+  padding: 13px;
+  background: var(--blue);
+  color: white;
+  border: none;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.search-btn:active { background: var(--blue-dark); }
+.search-btn:disabled { background: #94a3b8; }
+
+/* Results */
+.results { padding: 0 12px 20px; }
+.route-card {
+  background: var(--card);
+  border-radius: 14px;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  overflow: hidden;
+}
+.route-summary {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.route-summary .time {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--blue);
+}
+.route-summary .meta {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.route-detail {
+  padding: 0;
+}
+.route-detail.collapsed { display: none; }
+.toggle-detail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--blue);
+  cursor: pointer;
+  border-top: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+/* Route steps */
+.step {
+  display: flex;
+  align-items: stretch;
+}
+.step-line {
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+.step-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--blue);
+  border: 3px solid white;
+  box-shadow: 0 0 0 2px var(--blue);
+  z-index: 2;
+  flex-shrink: 0;
+}
+.step-dot.transfer { background: var(--orange); box-shadow: 0 0 0 2px var(--orange); }
+.step-dot.walk { background: var(--muted); box-shadow: 0 0 0 2px var(--muted); }
+.step-dot.end { background: var(--red); box-shadow: 0 0 0 2px var(--red); }
+.step-bar {
+  width: 3px;
+  flex: 1;
+  min-height: 20px;
+}
+.step-bar.rail { background: var(--blue); }
+.step-bar.transfer { background: var(--orange); background: repeating-linear-gradient(to bottom, var(--orange) 0,var(--orange) 4px,transparent 4px,transparent 8px); }
+.step-bar.walk { background: repeating-linear-gradient(to bottom, var(--muted) 0,var(--muted) 3px,transparent 3px,transparent 6px); }
+.step-bar.none { background: none; }
+.step-content {
+  flex: 1;
+  padding: 4px 16px 14px 10px;
+  min-width: 0;
+}
+.step-station {
+  font-size: 15px;
+  font-weight: 600;
+}
+.step-info {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.step-info .line-tag {
+  display: inline-block;
+  background: #eff6ff;
+  color: var(--blue);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+  font-size: 11px;
+}
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--muted);
+}
+.empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+.no-route {
+  text-align: center;
+  padding: 24px;
+  color: var(--red);
+  font-size: 14px;
+}
+
+/* Status bar */
+.status-bar {
+  text-align: center;
+  padding: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <rect x="4" y="3" width="16" height="14" rx="2"/><path d="M4 10h16"/><path d="M8 17v4M16 17v4M6 21h4M14 21h4"/>
+  </svg>
+  <h1>乗換案内</h1>
+  <span class="badge" id="badge">読込中</span>
+</div>
+
+<div class="search-card">
+  <div class="station-fields" id="station-fields">
+    <!-- Departure -->
+    <div class="field-row" data-role="dep">
+      <span class="field-label dep">発</span>
+      <div class="field-input">
+        <input type="text" placeholder="出発駅" autocomplete="off">
+        <button class="field-clear" onclick="clearField(this)">&times;</button>
+        <div class="ac-dropdown"></div>
+      </div>
+    </div>
+    <!-- Arrival -->
+    <div class="field-row" data-role="arr">
+      <span class="field-label arr">着</span>
+      <div class="field-input">
+        <input type="text" placeholder="到着駅" autocomplete="off">
+        <button class="field-clear" onclick="clearField(this)">&times;</button>
+        <div class="ac-dropdown"></div>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="add-via-btn" onclick="addVia()">+ 経由駅</button>
+    <button class="swap-btn" onclick="swapDepArr()">入替</button>
+  </div>
+  <button class="search-btn" id="search-btn" onclick="doSearch()" disabled>検索</button>
+</div>
+
+<div class="results" id="results">
+  <div class="empty-state">
+    <div class="icon">&#128644;</div>
+    <p>駅名を入力して経路を検索</p>
+  </div>
+</div>
+
+<div class="status-bar" id="status">データ読み込み中...</div>
+
+<script>
+// === Global State ===
+let graph = null;
+const selectedStations = {}; // fieldId -> stationIndex
+
+// === Data Loading ===
+fetch('graph.json')
+  .then(r => r.json())
+  .then(data => {
+    graph = data;
+    // Pre-build name index for fast search
+    graph._nameIndex = [];
+    for (let i = 0; i < graph.stations.length; i++) {
+      const s = graph.stations[i];
+      graph._nameIndex.push({
+        id: i,
+        name: s.n,
+        nameEn: (s.e || '').toLowerCase(),
+        pref: s.p,
+        lines: s.l,
+      });
+    }
+    document.getElementById('badge').textContent = `${graph.stats.stations}駅`;
+    document.getElementById('status').textContent =
+      `${graph.stats.stations}駅 / ${graph.stats.edges}区間 / オフライン対応`;
+    document.getElementById('search-btn').disabled = false;
+    initAutocomplete();
+  })
+  .catch(() => {
+    document.getElementById('status').textContent = 'データ読み込みエラー';
+  });
+
+// === Autocomplete ===
+function searchStations(query) {
+  if (!graph || query.length < 1) return [];
+  const q = query.toLowerCase();
+  const results = [];
+  for (const s of graph._nameIndex) {
+    if (s.name.includes(query) || s.nameEn.includes(q)) {
+      results.push(s);
+      if (results.length >= 12) break;
+    }
+  }
+  results.sort((a, b) => {
+    if (a.name === query && b.name !== query) return -1;
+    if (b.name === query && a.name !== query) return 1;
+    if (a.name.startsWith(query) && !b.name.startsWith(query)) return -1;
+    if (b.name.startsWith(query) && !a.name.startsWith(query)) return 1;
+    return a.name.length - b.name.length;
+  });
+  return results;
+}
+
+function initAutocomplete() {
+  document.querySelectorAll('.field-row').forEach(setupFieldAC);
+}
+
+function setupFieldAC(row) {
+  const input = row.querySelector('input');
+  const dropdown = row.querySelector('.ac-dropdown');
+  if (!input || !dropdown) return;
+
+  const fieldId = input.closest('.field-row').dataset.role + '-' +
+    Array.from(document.querySelectorAll('.field-row')).indexOf(input.closest('.field-row'));
+
+  input.dataset.fieldId = fieldId;
+
+  input.addEventListener('input', () => {
+    delete selectedStations[input.dataset.fieldId];
+    const results = searchStations(input.value);
+    if (results.length === 0 || !input.value) {
+      dropdown.classList.remove('show');
+      return;
+    }
+    dropdown.innerHTML = results.map(s => `
+      <div class="ac-item" data-id="${s.id}">
+        <div>
+          <div class="ac-name">${s.name}</div>
+          <div class="ac-sub">${s.pref ? s.pref + ' / ' : ''}${s.lines.length ? s.lines[0] : ''}</div>
+        </div>
+      </div>
+    `).join('');
+    dropdown.classList.add('show');
+
+    dropdown.querySelectorAll('.ac-item').forEach(el => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const id = parseInt(el.dataset.id);
+        input.value = graph.stations[id].n;
+        selectedStations[input.dataset.fieldId] = id;
+        dropdown.classList.remove('show');
+      });
+    });
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(() => dropdown.classList.remove('show'), 150);
+  });
+}
+
+// === Via Stations ===
+let viaCount = 0;
+function addVia() {
+  if (viaCount >= 3) return;
+  viaCount++;
+  const arrRow = document.querySelector('[data-role="arr"]');
+  const via = document.createElement('div');
+  via.className = 'field-row';
+  via.dataset.role = 'via';
+  via.innerHTML = `
+    <span class="field-label via">経</span>
+    <div class="field-input">
+      <input type="text" placeholder="経由駅" autocomplete="off">
+      <button class="field-clear" onclick="clearField(this)">&times;</button>
+      <div class="ac-dropdown"></div>
+    </div>
+    <button class="remove-via" onclick="removeVia(this)">&times;</button>
+  `;
+  arrRow.parentNode.insertBefore(via, arrRow);
+  setupFieldAC(via);
+  via.querySelector('input').focus();
+}
+
+function removeVia(btn) {
+  const row = btn.closest('.field-row');
+  const input = row.querySelector('input');
+  if (input && input.dataset.fieldId) {
+    delete selectedStations[input.dataset.fieldId];
+  }
+  row.remove();
+  viaCount--;
+}
+
+function clearField(btn) {
+  const input = btn.previousElementSibling;
+  input.value = '';
+  if (input.dataset.fieldId) delete selectedStations[input.dataset.fieldId];
+  input.focus();
+}
+
+function swapDepArr() {
+  const rows = document.querySelectorAll('.field-row');
+  const depRow = rows[0];
+  const arrRow = rows[rows.length - 1];
+  const depInput = depRow.querySelector('input');
+  const arrInput = arrRow.querySelector('input');
+  const tmpVal = depInput.value;
+  const tmpId = selectedStations[depInput.dataset.fieldId];
+  depInput.value = arrInput.value;
+  selectedStations[depInput.dataset.fieldId] = selectedStations[arrInput.dataset.fieldId];
+  arrInput.value = tmpVal;
+  selectedStations[arrInput.dataset.fieldId] = tmpId;
+}
+
+// === Dijkstra ===
+function dijkstra(startId, endId) {
+  const n = graph.stations.length;
+  const dist = new Float64Array(n).fill(Infinity);
+  const prev = new Int32Array(n).fill(-1);
+  const prevEdgeLine = new Array(n).fill('');
+  const visited = new Uint8Array(n);
+  dist[startId] = 0;
+
+  // Binary heap
+  const heap = [[0, startId]];
+  function push(d, v) {
+    heap.push([d, v]);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[i][0] >= heap[p][0]) break;
+      [heap[i], heap[p]] = [heap[p], heap[i]];
+      i = p;
+    }
+  }
+  function pop() {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length > 0) {
+      heap[0] = last;
+      let i = 0;
+      while (true) {
+        let s = i, l = 2*i+1, r = 2*i+2;
+        if (l < heap.length && heap[l][0] < heap[s][0]) s = l;
+        if (r < heap.length && heap[r][0] < heap[s][0]) s = r;
+        if (s === i) break;
+        [heap[i], heap[s]] = [heap[s], heap[i]];
+        i = s;
+      }
+    }
+    return top;
+  }
+
+  while (heap.length > 0) {
+    const [d, u] = pop();
+    if (visited[u]) continue;
+    visited[u] = 1;
+    if (u === endId) break;
+
+    const neighbors = graph.edges[u];
+    if (!neighbors) continue;
+
+    for (const [v, w, line] of neighbors) {
+      if (visited[v]) continue;
+      // Transfer penalty
+      let penalty = 0;
+      if (prev[u] !== -1 && prevEdgeLine[u] && prevEdgeLine[u] !== '_rail' &&
+          line !== prevEdgeLine[u] && line !== '_rail') {
+        penalty = 500; // ~5min equivalent
+      }
+      const nd = d + w + penalty;
+      if (nd < dist[v]) {
+        dist[v] = nd;
+        prev[v] = u;
+        prevEdgeLine[v] = line;
+        push(nd, v);
+      }
+    }
+  }
+
+  if (dist[endId] === Infinity) return null;
+
+  const path = [];
+  let cur = endId;
+  while (cur !== -1) {
+    path.unshift({ id: cur, line: prevEdgeLine[cur] });
+    cur = prev[cur];
+  }
+  return { path, distance: dist[endId] };
+}
+
+// Find all station IDs matching a name exactly
+function findAllByName(name) {
+  const ids = [];
+  for (let i = 0; i < graph.stations.length; i++) {
+    if (graph.stations[i].n === name) ids.push(i);
+  }
+  return ids;
+}
+
+// === Search ===
+function doSearch() {
+  const rows = document.querySelectorAll('.field-row');
+  const waypointCandidates = []; // each element is array of candidate station IDs
+
+  for (const row of rows) {
+    const input = row.querySelector('input');
+    const fid = input.dataset.fieldId;
+    const sid = selectedStations[fid];
+
+    if (sid === undefined || sid === null) {
+      const text = input.value.trim();
+      if (!text) {
+        if (row.dataset.role !== 'via') {
+          alert(row.dataset.role === 'dep' ? '出発駅を選択してください' : '到着駅を選択してください');
+          return;
+        }
+        continue;
+      }
+      // Find all stations with this exact name
+      const allIds = findAllByName(text);
+      if (allIds.length > 0) {
+        waypointCandidates.push(allIds);
+      } else {
+        // Fuzzy: try first autocomplete match
+        const matches = searchStations(text);
+        if (matches.length > 0) {
+          const name = matches[0].name;
+          waypointCandidates.push(findAllByName(name));
+          input.value = name;
+        } else {
+          alert(`「${text}」が見つかりません`);
+          return;
+        }
+      }
+    } else {
+      // User selected a specific station, but also include same-name alternatives
+      const name = graph.stations[sid].n;
+      const allIds = findAllByName(name);
+      waypointCandidates.push(allIds.length > 1 ? allIds : [sid]);
+    }
+  }
+
+  if (waypointCandidates.length < 2) {
+    alert('出発駅と到着駅を入力してください');
+    return;
+  }
+
+  // For each segment, try all combinations of candidates and pick shortest
+  let totalPath = [];
+  let totalDist = 0;
+  let failed = false;
+
+  for (let i = 0; i < waypointCandidates.length - 1; i++) {
+    const fromCandidates = waypointCandidates[i];
+    const toCandidates = waypointCandidates[i + 1];
+
+    let bestResult = null;
+    for (const fid of fromCandidates) {
+      for (const tid of toCandidates) {
+        if (fid === tid) continue;
+        const result = dijkstra(fid, tid);
+        if (result && (!bestResult || result.distance < bestResult.distance)) {
+          bestResult = result;
+        }
+      }
+    }
+
+    if (!bestResult) {
+      const fn = graph.stations[fromCandidates[0]].n;
+      const tn = graph.stations[toCandidates[0]].n;
+      document.getElementById('results').innerHTML =
+        `<div class="no-route">${fn} → ${tn} の経路が見つかりません</div>`;
+      return;
+    }
+
+    if (totalPath.length > 0) {
+      totalPath = totalPath.concat(bestResult.path.slice(1));
+    } else {
+      totalPath = bestResult.path;
+    }
+    totalDist += bestResult.distance;
+  }
+
+  renderResults({ path: totalPath, distance: totalDist });
+}
+
+// === Rendering ===
+function renderResults(result) {
+  const { path, distance } = result;
+
+  // Collapse into segments by line
+  const lineSegments = [];
+  let currentLine = '';
+  let segStart = 0;
+
+  for (let i = 1; i < path.length; i++) {
+    const line = path[i].line;
+    if (line !== currentLine && i > 1) {
+      lineSegments.push({ line: currentLine, from: segStart, to: i - 1 });
+      segStart = i - 1;
+    }
+    currentLine = line;
+  }
+  lineSegments.push({ line: currentLine, from: segStart, to: path.length - 1 });
+
+  // Compute time estimate
+  // Rail: ~60km/h average (includes stops) = 1000m/min
+  // Walk/transfer: ~80m/min
+  let totalMin = 0;
+  for (const seg of lineSegments) {
+    let segDist = 0;
+    for (let i = seg.from + 1; i <= seg.to; i++) {
+      const fromId = path[i-1].id;
+      const toId = path[i].id;
+      const edges = graph.edges[fromId];
+      if (edges) {
+        const e = edges.find(e => e[0] === toId);
+        if (e) segDist += e[1];
+      }
+    }
+    totalMin += segDist / 1000; // ~1km/min for rail
+  }
+  totalMin = Math.max(1, Math.round(totalMin));
+
+  const transfers = lineSegments.filter(s =>
+    s.line !== '_rail' && s.line !== '_transfer' && s.line !== '_walk'
+  ).length;
+  const railTransfers = Math.max(0, transfers - 1);
+  const totalTransfers = lineSegments.length - 1;
+
+  let html = `<div class="route-card">`;
+
+  // Summary
+  html += `<div class="route-summary">
+    <span class="time">約${totalMin}分</span>
+    <div class="meta">
+      <div>${totalTransfers > 0 ? totalTransfers + '回乗換' : '直通'} / ${(distance/1000).toFixed(1)}km</div>
+      <div>${path.length}駅</div>
+    </div>
+  </div>`;
+
+  // Detail (collapsible)
+  html += `<div class="route-detail" id="route-detail">`;
+
+  for (let si = 0; si < lineSegments.length; si++) {
+    const seg = lineSegments[si];
+    const fromStn = graph.stations[path[seg.from].id];
+    const toStn = graph.stations[path[seg.to].id];
+    const isLast = si === lineSegments.length - 1;
+    const stationCount = seg.to - seg.from;
+    const isRail = seg.line !== '_transfer' && seg.line !== '_walk';
+    const lineName = seg.line === '_rail' ? '鉄道' :
+                     seg.line === '_transfer' ? '乗換' :
+                     seg.line === '_walk' ? '徒歩' : seg.line;
+
+    const barClass = isRail ? 'rail' : (seg.line === '_walk' ? 'walk' : 'transfer');
+    const dotClass = isRail ? '' : (seg.line === '_walk' ? 'walk' : 'transfer');
+
+    // Start station + line info
+    html += `<div class="step">
+      <div class="step-line">
+        <div class="step-dot ${dotClass}"></div>
+        <div class="step-bar ${barClass}"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-station">${fromStn.n}</div>
+        <div class="step-info">
+          <span class="line-tag">${lineName}</span>
+          ${isRail ? ` ${stationCount}駅` : ''}
+        </div>
+      </div>
+    </div>`;
+
+    // Last segment: show arrival station
+    if (isLast) {
+      html += `<div class="step">
+        <div class="step-line">
+          <div class="step-dot end"></div>
+          <div class="step-bar none"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-station">${toStn.n}</div>
+          <div class="step-info">到着</div>
+        </div>
+      </div>`;
+    }
+  }
+
+  html += `</div>`; // route-detail
+
+  // Toggle
+  html += `<div class="toggle-detail" onclick="toggleDetail()">
+    <span id="toggle-text">詳細を隠す</span>
+  </div>`;
+
+  html += `</div>`; // route-card
+
+  // Show all intermediate stations (expandable)
+  html += `<div class="route-card" id="all-stations-card" style="display:none">
+    <div class="route-summary" onclick="toggleAllStations()" style="cursor:pointer">
+      <span style="font-size:14px;font-weight:600;color:var(--text)">全停車駅</span>
+      <div class="meta" id="all-stations-toggle">表示する</div>
+    </div>
+    <div id="all-stations-list" style="display:none;padding:12px 16px;font-size:13px;line-height:2;color:var(--text)"></div>
+  </div>`;
+
+  document.getElementById('results').innerHTML = html;
+
+  // Build all-stations list
+  if (path.length > 2) {
+    document.getElementById('all-stations-card').style.display = '';
+    const allNames = path.map(p => graph.stations[p.id].n);
+    document.getElementById('all-stations-list').innerHTML =
+      allNames.map((n, i) => {
+        const weight = (i === 0 || i === allNames.length - 1) ? 'font-weight:600' : '';
+        return `<span style="${weight}">${n}</span>`;
+      }).join(' → ');
+  }
+}
+
+function toggleDetail() {
+  const el = document.getElementById('route-detail');
+  const text = document.getElementById('toggle-text');
+  if (el.classList.contains('collapsed')) {
+    el.classList.remove('collapsed');
+    text.textContent = '詳細を隠す';
+  } else {
+    el.classList.add('collapsed');
+    text.textContent = '詳細を表示';
+  }
+}
+
+function toggleAllStations() {
+  const el = document.getElementById('all-stations-list');
+  const text = document.getElementById('all-stations-toggle');
+  if (el.style.display === 'none') {
+    el.style.display = '';
+    text.textContent = '隠す';
+  } else {
+    el.style.display = 'none';
+    text.textContent = '表示する';
+  }
+}
+
+// === Service Worker ===
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js');
+}
+</script>
+</body>
+</html>
