@@ -377,14 +377,16 @@ let graph = null;
 const selectedStations = {}; // fieldId -> stationIndex
 
 // === Data Loading ===
-fetch('graph.json')
+fetch('graph.json?v=4')
   .then(r => r.json())
   .then(data => {
     graph = data;
     // Pre-build name index for fast search
     graph._nameIndex = [];
+    let withLines = 0;
     for (let i = 0; i < graph.stations.length; i++) {
       const s = graph.stations[i];
+      if (s.l && s.l.length > 0) withLines++;
       graph._nameIndex.push({
         id: i,
         name: s.n,
@@ -395,12 +397,13 @@ fetch('graph.json')
     }
     document.getElementById('badge').textContent = `${graph.stats.stations}駅`;
     document.getElementById('status').textContent =
-      `${graph.stats.stations}駅 / ${graph.stats.edges}区間 / オフライン対応`;
+      `${graph.stats.stations}駅 / ${graph.stats.lines}路線 / オフライン対応`;
     document.getElementById('search-btn').disabled = false;
+    console.log(`Graph loaded: ${graph.stats.stations} stations, ${withLines} with lines, ${graph.stats.lines} lines`);
     initAutocomplete();
   })
-  .catch(() => {
-    document.getElementById('status').textContent = 'データ読み込みエラー';
+  .catch((e) => {
+    document.getElementById('status').textContent = 'データ読み込みエラー: ' + e.message;
   });
 
 // === Autocomplete ===

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'transit-v3';
+const CACHE_NAME = 'transit-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -22,8 +22,15 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
+// Network-first: try network, fall back to cache (ensures updates are picked up)
 self.addEventListener('fetch', e => {
   e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request))
+    fetch(e.request)
+      .then(resp => {
+        const clone = resp.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+        return resp;
+      })
+      .catch(() => caches.match(e.request))
   );
 });
