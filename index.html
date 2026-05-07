@@ -424,9 +424,14 @@ document.addEventListener('DOMContentLoaded', () => {
 let throughPairs = new Set();
 let trainTypes = null;
 let fareData = null;
+let timetableData = null;
 fetch('frequency.json?v=1').then(r => r.json()).then(d => { freqData = d; });
 fetch('train_types.json?v=1').then(r => r.json()).then(d => { trainTypes = d; });
 fetch('fares.json?v=1').then(r => r.json()).then(d => { fareData = d; });
+fetch('timetable.json?v=1').then(r => r.json()).then(d => {
+  timetableData = d.data;
+  console.log(`Timetable loaded: ${d.stats.stations_with_tt} stations, ${d.stats.total_departures} departures`);
+});
 fetch('through_service.json?v=1').then(r => r.json()).then(d => {
   for (const [a, b] of d.pairs) {
     throughPairs.add(a + '|' + b);
@@ -939,6 +944,39 @@ function getTrainType(lineName) {
   return types[0]; // First entry is fastest
 }
 
+// Normalize line name for timetable matching
+function normalizeLine(s) {
+  return s.replace(/ＪＲ/g, '').replace(/東京メトロ/g, '').replace(/都営地下鉄/g, '都営');
+}
+
+// Find next departure from timetable for a station/line after given time
+function findNextDeparture(stationId, lineName, afterMinutes) {
+  if (!timetableData) return null;
+  const dirs = timetableData[String(stationId)];
+  if (!dirs) return null;
+
+  const normLine = normalizeLine(lineName);
+  // Find matching direction(s)
+  for (const d of dirs) {
+    const dirLine = d.dir.split('　')[0].split(' ')[0]; // split on fullwidth or halfwidth space
+    const normDir = normalizeLine(dirLine);
+    if (normDir === normLine || normDir.includes(normLine) || normLine.includes(normDir)) {
+      // Binary search for next departure >= afterMinutes
+      const deps = d.deps;
+      let lo = 0, hi = deps.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (deps[mid] < afterMinutes) lo = mid + 1;
+        else hi = mid;
+      }
+      if (lo < deps.length) {
+        return deps[lo];
+      }
+    }
+  }
+  return null;
+}
+
 function calculateTimes(path, lineSegments, startMinutes) {
   const segTimes = [];
   let currentTime = startMinutes;
@@ -946,28 +984,64 @@ function calculateTimes(path, lineSegments, startMinutes) {
   for (let si = 0; si < lineSegments.length; si++) {
     const seg = lineSegments[si];
     const stationCount = seg.to - seg.from;
+    const fromStationId = path[seg.from].id;
 
-    // Wait for next train
-    const hour = Math.floor(currentTime / 60) % 24;
-    const freq = getFrequency(seg.line, hour);
     const prevSeg = si > 0 ? lineSegments[si - 1] : null;
     const isThrough = prevSeg && isThroughService(prevSeg.line, seg.line);
-    const waitTime = (si === 0 || isThrough) ? 0 : Math.round(freq / 2);
 
-    const depTime = currentTime + waitTime;
+    // Try real timetable first
+    let depTime = null;
+    let usedTimetable = false;
 
-    // Travel time with train type speed factor
+    if (!isThrough || si === 0) {
+      const nextDep = findNextDeparture(fromStationId, seg.line, Math.ceil(currentTime));
+      if (nextDep !== null) {
+        depTime = nextDep;
+        usedTimetable = true;
+      }
+    }
+
+    // Fallback to frequency-based estimate
+    if (depTime === null) {
+      if (si === 0 || isThrough) {
+        depTime = currentTime;
+      } else {
+        const hour = Math.floor(currentTime / 60) % 24;
+        const freq = getFrequency(seg.line, hour);
+        depTime = currentTime + Math.round(freq / 2);
+      }
+    }
+
+    const waitTime = Math.round(depTime - currentTime);
+
+    // Travel time: use timetable at arrival station if possible
+    const toStationId = path[seg.to].id;
+    let arrTime = null;
+
+    if (usedTimetable) {
+      // Try to find arrival by looking at destination station's timetable
+      // for the same line, finding a departure close to expected arrival
+      const tt = getTrainType(seg.line);
+      const estTravel = stationCount * 2.5 * tt.speed_factor;
+      arrTime = depTime + Math.round(estTravel);
+    }
+
+    if (arrTime === null) {
+      const tt = getTrainType(seg.line);
+      const travelTime = stationCount * 2.5 * tt.speed_factor;
+      arrTime = depTime + travelTime;
+    }
+
+    const travelTime = Math.round(arrTime - depTime);
     const tt = getTrainType(seg.line);
-    const baseTime = stationCount * 2.5;
-    const travelTime = baseTime * tt.speed_factor;
-    const arrTime = depTime + travelTime;
 
     segTimes.push({
       depTime: Math.round(depTime),
       arrTime: Math.round(arrTime),
-      waitTime,
-      travelTime: Math.round(travelTime),
+      waitTime: Math.max(0, waitTime),
+      travelTime,
       trainType: tt.type,
+      fromTimetable: usedTimetable,
     });
 
     currentTime = arrTime;
@@ -1165,7 +1239,7 @@ function renderOneRoute(result, index, searchTime) {
         <div class="step-info">
           <span class="line-tag" style="background:${color}11;color:${color}">${lineName}</span>
           ${st.trainType !== '各停' && st.trainType !== '普通' ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${st.trainType}</span>` : ''}
-          ${stationCount}駅 ${st.travelTime}分${st.waitTime > 0 ? ` <span style="color:var(--orange)">(待${st.waitTime}分)</span>` : ''}
+          ${stationCount}駅 ${st.travelTime}分${st.waitTime > 0 ? ` <span style="color:var(--orange)">(待${st.waitTime}分${st.fromTimetable ? '' : '≈'})</span>` : ''}
         </div>
         ${throughNext ? `<div style="margin-top:4px;font-size:11px;color:var(--green);font-weight:500">↓ ${nextSeg.line} に直通・乗換不要</div>` : ''}
       </div>
@@ -1258,7 +1332,7 @@ if ('serviceWorker' in navigator) {
   // Check offline readiness
   window.addEventListener('load', async () => {
     if ('caches' in window) {
-      const cache = await caches.open('transit-v7');
+      const cache = await caches.open('transit-v8');
       const keys = await cache.keys();
       const statusEl = document.getElementById('status');
       if (keys.length >= 4) { // index.html + graph.json + frequency.json + through_service.json minimum
