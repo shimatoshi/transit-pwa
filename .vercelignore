@@ -1,0 +1,11 @@
+train_data.json
+train_data.json.tmp
+trains.json
+train_urls.json
+timetable_raw.json
+wikidata_stations.json
+ekitan_stations.json
+*.py
+*.log
+__pycache__
+.vercel
