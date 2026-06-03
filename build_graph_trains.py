@@ -38,6 +38,17 @@ DEFAULT_DT = 2  # fallback when no arr/dep pair was available for a segment
 # The busiest (native) line always survives, so connectivity is never lost.
 GHOST_FRAC = 0.15
 
+# Train types that stop at every station -> define the base topology.
+# Anything else is an express/limited service layered on top.
+LOCAL_TYPES = {'各停', '各駅停車', '普通', '普通車', ''}
+
+# Express (non-local) edges are kept only if at least this many express trains
+# traverse the pair. This drops once-or-twice-a-day long-distance trains
+# (e.g. 寝台特急サンライズ, サフィール踊り子) that would otherwise create
+# unrealistic skip shortcuts, while keeping frequent 特急/快速/急行 as fast
+# options. Local edges are NEVER frequency-filtered (rural lines run few trains).
+MIN_EXPRESS = 8
+
 
 def main():
     with open(TRAINS) as f:
@@ -49,11 +60,16 @@ def main():
     id2lines = defaultdict(set)
     # key (min,max,line) -> list of travel minutes
     seg_times = defaultdict(list)
-    # unordered pair (min,max) -> Counter(line -> #traversals)  (for dominant line)
+    # unordered pair (min,max) -> Counter(line -> #traversals)  (all trains)
     pair_votes = defaultdict(Counter)
+    # (pair, line) seen on a local (all-stop) train -> defines base topology
+    local_seg = set()
+    # (pair, line) -> #express trains (for the MIN_EXPRESS frequency filter)
+    exp_count = defaultdict(int)
 
     for t in trains:
         line = t['line']
+        is_local = t.get('type', '') in LOCAL_TYPES
         stops = t['stops']
         for i in range(len(stops) - 1):
             s1, s2 = stops[i], stops[i + 1]
@@ -66,12 +82,17 @@ def main():
             id2lines[b].add(line)
             lo, hi = (a, b) if a < b else (b, a)
             pair_votes[(lo, hi)][line] += 1
+            if is_local:
+                local_seg.add((lo, hi, line))
+            else:
+                exp_count[(lo, hi, line)] += 1
             if s1['d'] is not None and s2['a'] is not None:
                 dt = s2['a'] - s1['d']
                 if MIN_DT <= dt <= MAX_DT:
                     seg_times[(lo, hi, line)].append(dt)
 
     print(f"Unique stations (ekitan ids): {len(id2name)}")
+    print(f"Local (all-stop) segment+line keys: {len(local_seg)}")
 
     # --- enrich coords/pref from old graph by name (best effort) ---
     name2geo = {}
@@ -116,22 +137,52 @@ def main():
     edges = defaultdict(list)
     edge_count = 0
     ghost_dropped = 0
-    # union of (pair, line) we should emit: every voted line that isn't a ghost
+    rare_express_dropped = 0
+    express_kept = 0
+    # Rare-express edges that were dropped below; kept aside as last-resort
+    # connectors. Each: (weight, ai, bi, line). After the main graph is built
+    # we re-add only the ones that bridge otherwise-disconnected components
+    # (Kruskal-style), so sparse lines whose ONLY service is an infrequent
+    # express (五能線 リゾートしらかみ, 日南線, etc.) stay reachable, while
+    # redundant shortcuts (Tokyo-Yokohama by the nightly Sunrise, whose ends
+    # are already linked via the local corridor) do NOT come back.
+    rare_edges = []
+    # Emit a (pair, line) edge if it is either:
+    #   - a LOCAL edge (all-stop train ran it) -> base topology, always kept, OR
+    #   - an EXPRESS edge with >= MIN_EXPRESS trains -> frequent fast option.
+    # Through-service ghost labels are dropped in both cases.
     for (lo, hi), votes in pair_votes.items():
+        top_line = dominant[(lo, hi)]
         for line in votes:
-            if is_ghost((lo, hi), line):
-                ghost_dropped += 1
-                continue
+            local = (lo, hi, line) in local_seg
             times = seg_times.get((lo, hi, line))
             med = round(statistics.median(times)) if times else DEFAULT_DT
             # tiny tie-break so routing prefers the busiest line on the pair
-            w = med + (0.0 if dominant[(lo, hi)] == line else 0.05)
+            w = med + (0.0 if line == top_line else 0.05)
             ai, bi = eid_to_idx[lo], eid_to_idx[hi]
+            if not local:
+                # express layer: require enough trains, else it's a rare
+                # long-distance shortcut (sleeper, seasonal ltd express).
+                # Defer it as a connectivity-completion candidate rather than
+                # emitting it as a routable fast option.
+                if exp_count[(lo, hi, line)] < MIN_EXPRESS:
+                    rare_express_dropped += 1
+                    rare_edges.append((w, ai, bi, line))
+                    continue
+            # drop through-service ghost labels (the dominant line, having the
+            # top vote count, is by definition never a ghost)
+            if is_ghost((lo, hi), line):
+                ghost_dropped += 1
+                continue
             edges[ai].append([bi, w, line])
             edges[bi].append([ai, w, line])
             edge_count += 1
+            if not local:
+                express_kept += 1
 
-    print(f"Edges (per pair+line, undirected): {edge_count} (ghost labels dropped: {ghost_dropped})")
+    print(f"Edges (undirected): {edge_count}  "
+          f"[express kept: {express_kept}, rare-express dropped: {rare_express_dropped}, "
+          f"ghost dropped: {ghost_dropped}]")
 
     # --- keep biggest connected component ---
     parent = list(range(len(stations)))
@@ -150,6 +201,20 @@ def main():
     for ai, nbrs in edges.items():
         for bi, _, _ in nbrs:
             union(ai, bi)
+
+    # Connectivity completion: re-add a dropped rare express only when it joins
+    # two components that the kept edges left separate. Cheapest first, so the
+    # fastest available connector wins when several would bridge the same gap.
+    rare_readded = 0
+    rare_edges.sort(key=lambda e: e[0])
+    for w, ai, bi, line in rare_edges:
+        if find(ai) != find(bi):
+            union(ai, bi)
+            edges[ai].append([bi, w, line])
+            edges[bi].append([ai, w, line])
+            edge_count += 1
+            rare_readded += 1
+    print(f"Rare-express re-added for connectivity: {rare_readded}")
 
     comp = defaultdict(list)
     for i in range(len(stations)):
