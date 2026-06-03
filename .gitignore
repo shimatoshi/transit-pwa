@@ -1,1 +1,11 @@
 .vercel
+# 大物データ・中間生成物（GitHub Releaseで管理）
+trains.json
+trains.json.gz
+train_data.json
+train_data.json.tmp
+train_urls.json
+timetable.json
+timetable_raw.json
+ekitan_stations.json
+*.b64

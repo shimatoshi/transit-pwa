@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""
+Build transit graph from trains.json (train-axis timetable data).
+
+Why: the old build_graph.py derived edges from Wikidata P197 adjacency, which is
+incomplete (e.g. Tsukuba Express dead-ends at Kita-senju) and mislabels lines.
+trains.json contains real train stop sequences with arrival/departure times, so
+consecutive stops give us correct topology, correct line names, and REAL travel
+times.
+
+Output graph_v2.json schema (compatible-ish with graph.json):
+  stations: [{n, e, la, lo, p, l, k}]   # k = ekitan station id
+  edges:    {idx: [[to_idx, minutes, line], ...]}   # weight is real travel minutes
+  lines:    [...]
+  stats:    {...}
+
+Edges are kept per (station-pair, line) so parallel lines sharing a station pair
+(e.g. TX / Hibiya / Joban all linking Kita-senju-Minami-senju) are NOT collapsed.
+A small tie-break penalty biases routing toward the line that runs the most trains
+on a given pair, which suppresses through-service "ghost" labels in the output.
+"""
+
+import json
+import os
+import statistics
+from collections import defaultdict, Counter
+
+BASE = os.path.expanduser('~/transit-pwa')
+TRAINS = os.path.join(BASE, 'trains.json')
+OLD_GRAPH = os.path.join(BASE, 'graph.json')
+OUTPUT = os.path.join(BASE, 'graph_v2.json')
+
+# A median travel time outside this range (minutes) is treated as bad data.
+MIN_DT, MAX_DT = 1, 240
+DEFAULT_DT = 2  # fallback when no arr/dep pair was available for a segment
+# A line whose train count on a pair is below this fraction of the pair's
+# busiest line is treated as a through-service "ghost" label and dropped.
+# The busiest (native) line always survives, so connectivity is never lost.
+GHOST_FRAC = 0.15
+
+
+def main():
+    with open(TRAINS) as f:
+        trains = json.load(f)['trains']
+    print(f"Trains: {len(trains)}")
+
+    # --- collect nodes, edge travel times, and per-pair line vote counts ---
+    id2name = {}
+    id2lines = defaultdict(set)
+    # key (min,max,line) -> list of travel minutes
+    seg_times = defaultdict(list)
+    # unordered pair (min,max) -> Counter(line -> #traversals)  (for dominant line)
+    pair_votes = defaultdict(Counter)
+
+    for t in trains:
+        line = t['line']
+        stops = t['stops']
+        for i in range(len(stops) - 1):
+            s1, s2 = stops[i], stops[i + 1]
+            a, b = s1['s'], s2['s']
+            if a == b:
+                continue
+            id2name[a] = s1['n']
+            id2name[b] = s2['n']
+            id2lines[a].add(line)
+            id2lines[b].add(line)
+            lo, hi = (a, b) if a < b else (b, a)
+            pair_votes[(lo, hi)][line] += 1
+            if s1['d'] is not None and s2['a'] is not None:
+                dt = s2['a'] - s1['d']
+                if MIN_DT <= dt <= MAX_DT:
+                    seg_times[(lo, hi, line)].append(dt)
+
+    print(f"Unique stations (ekitan ids): {len(id2name)}")
+
+    # --- enrich coords/pref from old graph by name (best effort) ---
+    name2geo = {}
+    try:
+        with open(OLD_GRAPH) as f:
+            old = json.load(f)
+        for s in old['stations']:
+            # first occurrence wins; duplicates are rare and geo is approximate
+            name2geo.setdefault(s['n'], (s.get('la'), s.get('lo'), s.get('p', ''), s.get('e', '')))
+        print(f"Old graph names for geo enrichment: {len(name2geo)}")
+    except FileNotFoundError:
+        print("WARN: old graph.json not found, stations will lack coords")
+
+    # --- assign compact indices (sorted by ekitan id for determinism) ---
+    ekitan_ids = sorted(id2name.keys(), key=lambda x: int(x))
+    eid_to_idx = {eid: i for i, eid in enumerate(ekitan_ids)}
+
+    stations = []
+    for eid in ekitan_ids:
+        nm = id2name[eid]
+        la, lo, pref, en = name2geo.get(nm, (None, None, '', ''))
+        stations.append({
+            'n': nm,
+            'e': en,
+            'la': la,
+            'lo': lo,
+            'p': pref,
+            'l': sorted(id2lines[eid]),
+            'k': eid,  # ekitan station id (for timetable / trains lookups)
+        })
+
+    # --- build edges per (pair, line) with real median travel time ---
+    # dominant line per pair (most train traversals) gets no tie-break penalty;
+    # other parallel lines get a tiny +0.05 so routing prefers the native line.
+    dominant = {pair: votes.most_common(1)[0][0] for pair, votes in pair_votes.items()}
+
+    def is_ghost(pair, line):
+        votes = pair_votes[pair]
+        top = votes.most_common(1)[0][1]
+        return votes[line] < GHOST_FRAC * top
+
+    edges = defaultdict(list)
+    edge_count = 0
+    ghost_dropped = 0
+    # union of (pair, line) we should emit: every voted line that isn't a ghost
+    for (lo, hi), votes in pair_votes.items():
+        for line in votes:
+            if is_ghost((lo, hi), line):
+                ghost_dropped += 1
+                continue
+            times = seg_times.get((lo, hi, line))
+            med = round(statistics.median(times)) if times else DEFAULT_DT
+            # tiny tie-break so routing prefers the busiest line on the pair
+            w = med + (0.0 if dominant[(lo, hi)] == line else 0.05)
+            ai, bi = eid_to_idx[lo], eid_to_idx[hi]
+            edges[ai].append([bi, w, line])
+            edges[bi].append([ai, w, line])
+            edge_count += 1
+
+    print(f"Edges (per pair+line, undirected): {edge_count} (ghost labels dropped: {ghost_dropped})")
+
+    # --- keep biggest connected component ---
+    parent = list(range(len(stations)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for ai, nbrs in edges.items():
+        for bi, _, _ in nbrs:
+            union(ai, bi)
+
+    comp = defaultdict(list)
+    for i in range(len(stations)):
+        comp[find(i)].append(i)
+    biggest = max(comp.values(), key=len)
+    biggest_set = set(biggest)
+    print(f"Components: {len(comp)}, biggest: {len(biggest)} stations")
+
+    # --- remap to biggest component ---
+    old_to_new = {}
+    new_stations = []
+    for old_i in sorted(biggest_set):
+        old_to_new[old_i] = len(new_stations)
+        new_stations.append(stations[old_i])
+
+    new_edges = {}
+    for old_i in biggest_set:
+        ni = old_to_new[old_i]
+        remapped = [[old_to_new[bi], w, line] for bi, w, line in edges.get(old_i, []) if bi in old_to_new]
+        if remapped:
+            new_edges[ni] = remapped
+
+    all_lines = sorted(set(line for s in new_stations for line in s['l']))
+    with_geo = sum(1 for s in new_stations if s['la'] is not None)
+
+    out = {
+        'stations': new_stations,
+        'edges': new_edges,
+        'lines': all_lines,
+        'stats': {
+            'stations': len(new_stations),
+            'lines': len(all_lines),
+            'edges': sum(len(v) for v in new_edges.values()) // 2,
+            'with_coords': with_geo,
+        },
+    }
+    with open(OUTPUT, 'w') as f:
+        json.dump(out, f, ensure_ascii=False, separators=(',', ':'))
+
+    size = os.path.getsize(OUTPUT)
+    print(f"\nOutput: {OUTPUT} ({size/1024:.0f} KB)")
+    print(f"Stats: {out['stats']}")
+
+
+if __name__ == '__main__':
+    main()
