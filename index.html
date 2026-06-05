@@ -404,6 +404,7 @@ body {
 
 <div class="status-bar" id="status">データ読み込み中...</div>
 
+<script src="router.js?v=1"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -420,30 +421,24 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // === Data Loading ===
-// Load supplementary data
-let throughPairs = new Set();
-let trainTypes = null;
-let fareData = null;
-let timetableData = null;
-fetch('frequency.json?v=1').then(r => r.json()).then(d => { freqData = d; });
-fetch('train_types.json?v=1').then(r => r.json()).then(d => { trainTypes = d; });
-fetch('fares.json?v=1').then(r => r.json()).then(d => { fareData = d; });
-fetch('timetable.json?v=1').then(r => r.json()).then(d => {
-  timetableData = d.data;
+// Load supplementary data (all routing logic lives in router.js)
+fetch('frequency.json?v=1').then(r => r.json()).then(d => { freqData = d; Router.setData('freq', d); });
+fetch('train_types.json?v=1').then(r => r.json()).then(d => { Router.setData('trainTypes', d); });
+fetch('fares.json?v=1').then(r => r.json()).then(d => { Router.setData('fares', d); });
+fetch('timetable_v2.json?v=1').then(r => r.json()).then(d => {
+  Router.setData('timetable', d);
   console.log(`Timetable loaded: ${d.stats.stations_with_tt} stations, ${d.stats.total_departures} departures`);
 });
 fetch('through_service.json?v=1').then(r => r.json()).then(d => {
-  for (const [a, b] of d.pairs) {
-    throughPairs.add(a + '|' + b);
-    throughPairs.add(b + '|' + a);
-  }
+  Router.setData('through', d);
   console.log(`Through-service pairs loaded: ${d.pairs.length}`);
 });
 
-fetch('graph.json?v=4')
+fetch('graph_v2.json?v=1')
   .then(r => r.json())
   .then(data => {
     graph = data;
+    Router.setData('graph', data);
     // Pre-build name index for fast search
     graph._nameIndex = [];
     let withLines = 0;
@@ -591,158 +586,17 @@ function swapDepArr() {
   selectedStations[arrInput.dataset.fieldId] = tmpId;
 }
 
-// === Dijkstra with optional banned edges ===
-function dijkstra(startId, endId, bannedEdges) {
-  const n = graph.stations.length;
-  const dist = new Float64Array(n).fill(Infinity);
-  const prev = new Int32Array(n).fill(-1);
-  const prevEdgeLine = new Array(n).fill('');
-  const visited = new Uint8Array(n);
-  dist[startId] = 0;
-
-  const heap = [[0, startId]];
-  function push(d, v) {
-    heap.push([d, v]);
-    let i = heap.length - 1;
-    while (i > 0) {
-      const p = (i - 1) >> 1;
-      if (heap[i][0] >= heap[p][0]) break;
-      [heap[i], heap[p]] = [heap[p], heap[i]];
-      i = p;
-    }
-  }
-  function pop() {
-    const top = heap[0];
-    const last = heap.pop();
-    if (heap.length > 0) {
-      heap[0] = last;
-      let i = 0;
-      while (true) {
-        let s = i, l = 2*i+1, r = 2*i+2;
-        if (l < heap.length && heap[l][0] < heap[s][0]) s = l;
-        if (r < heap.length && heap[r][0] < heap[s][0]) s = r;
-        if (s === i) break;
-        [heap[i], heap[s]] = [heap[s], heap[i]];
-        i = s;
-      }
-    }
-    return top;
-  }
-
-  while (heap.length > 0) {
-    const [d, u] = pop();
-    if (visited[u]) continue;
-    visited[u] = 1;
-    if (u === endId) break;
-
-    const neighbors = graph.edges[u];
-    if (!neighbors) continue;
-
-    for (const [v, w, line] of neighbors) {
-      if (visited[v]) continue;
-      // Check banned edges
-      if (bannedEdges && bannedEdges.has(u + ':' + v)) continue;
-
-      // Apply speed factor for faster trains
-      const tt = getTrainType(line);
-      const effectiveW = w * tt.speed_factor;
-
-      // Transfer penalty (skip if through-service)
-      let penalty = 0;
-      if (prev[u] !== -1 && prevEdgeLine[u] && prevEdgeLine[u] !== '_rail' &&
-          line !== prevEdgeLine[u] && line !== '_rail') {
-        if (!isThroughService(prevEdgeLine[u], line)) {
-          penalty = 500;
-        }
-      }
-      const nd = d + effectiveW + penalty;
-      if (nd < dist[v]) {
-        dist[v] = nd;
-        prev[v] = u;
-        prevEdgeLine[v] = line;
-        push(nd, v);
-      }
-    }
-  }
-
-  if (dist[endId] === Infinity) return null;
-
-  const path = [];
-  let cur = endId;
-  while (cur !== -1) {
-    path.unshift({ id: cur, line: prevEdgeLine[cur] });
-    cur = prev[cur];
-  }
-  return { path, distance: dist[endId] };
-}
-
-// === Find K alternative routes ===
-// Uses edge-penalty method: after finding shortest path,
-// penalize its edges and search again for a different route
-function findKRoutes(startId, endId, k = 3) {
-  const routes = [];
-  const usedEdgeSets = [];
-
-  // First: shortest path with no bans
-  const first = dijkstra(startId, endId, null);
-  if (!first) return routes;
-  routes.push(first);
-
-  // Extract path signature (set of line segments) to check uniqueness
-  function routeSignature(route) {
-    const segs = detectLineSegments(route.path);
-    return segs.map(s => s.line).join('|');
-  }
-  const seenSignatures = new Set([routeSignature(first)]);
-
-  // Try banning different portions of previous routes
-  for (let attempt = 0; attempt < k * 8 && routes.length < k; attempt++) {
-    const sourceRoute = routes[attempt % routes.length];
-    const pathIds = sourceRoute.path.map(p => p.id);
-
-    // Ban edges around a "spur point" — a station partway through the route
-    // Each attempt uses a different spur point
-    const spurIdx = Math.floor((attempt / routes.length + 1) * pathIds.length / (k * 2));
-    if (spurIdx <= 0 || spurIdx >= pathIds.length - 1) continue;
-
-    const banned = new Set();
-    // Ban the edge at the spur point from all found routes
-    for (const r of routes) {
-      const rIds = r.path.map(p => p.id);
-      for (let i = 0; i < rIds.length - 1; i++) {
-        // Ban edges that share the prefix up to the spur
-        if (i < spurIdx && i < pathIds.length - 1 && rIds[i] === pathIds[i]) {
-          continue; // Same prefix, don't ban yet
-        }
-        if (i >= spurIdx - 1 && i < spurIdx + 2 && i < rIds.length - 1) {
-          banned.add(rIds[i] + ':' + rIds[i + 1]);
-          banned.add(rIds[i + 1] + ':' + rIds[i]);
-        }
-      }
-    }
-
-    const alt = dijkstra(startId, endId, banned);
-    if (!alt) continue;
-
-    // Check the route is meaningfully different
-    const sig = routeSignature(alt);
-    if (seenSignatures.has(sig)) continue;
-
-    // Check distance isn't absurdly longer (max 3x the shortest)
-    if (alt.distance > first.distance * 3) continue;
-
-    seenSignatures.add(sig);
-    routes.push(alt);
-  }
-
-  return routes; // Don't sort here, sort later by time
-}
-
 // Find all station IDs matching a name exactly
 function findAllByName(name) {
+  const strip = s => s.replace(/[（(].*?[）)]/g, '');
   const ids = [];
   for (let i = 0; i < graph.stations.length; i++) {
     if (graph.stations[i].n === name) ids.push(i);
+  }
+  if (!ids.length) { // fallback: 括弧サフィックス除去で照合（札幌(ＪＲ)等）
+    for (let i = 0; i < graph.stations.length; i++) {
+      if (strip(graph.stations[i].n) === strip(name)) ids.push(i);
+    }
   }
   return ids;
 }
@@ -871,260 +725,13 @@ function doSearch() {
   }
 }
 
-// === Check if two lines have through-service (直通運転) ===
-function isThroughService(lineA, lineB) {
-  if (!lineA || !lineB || lineA === lineB) return false;
-  return throughPairs.has(lineA + '|' + lineB);
-}
-
-// === Detect line segments using station line membership ===
-function detectLineSegments(path) {
-  // For each pair of consecutive stations, find the shared line.
-  // When the shared line changes AND it's not through-service, that's a transfer.
-  const rawSegments = []; // {lineName, from, to}
-  let currentLine = '';
-  let segStart = 0;
-
-  for (let i = 1; i < path.length; i++) {
-    const prevStn = graph.stations[path[i-1].id];
-    const currStn = graph.stations[path[i].id];
-
-    // Find shared lines between two adjacent stations
-    const prevLines = new Set(prevStn.l || []);
-    const currLines = currStn.l || [];
-    const shared = currLines.filter(l => prevLines.has(l));
-
-    // Also check edge line
-    const edgeLine = path[i].line;
-    let bestLine = '_rail';
-
-    if (shared.length > 0) {
-      if (currentLine && shared.includes(currentLine)) {
-        bestLine = currentLine;
-      } else {
-        bestLine = shared[0];
-      }
-    } else if (edgeLine && edgeLine !== '_rail') {
-      bestLine = edgeLine;
-    }
-
-    if (bestLine !== currentLine && i > 1) {
-      rawSegments.push({ line: currentLine, from: segStart, to: i - 1 });
-      segStart = i - 1;
-    }
-    currentLine = bestLine;
-  }
-  rawSegments.push({ line: currentLine, from: segStart, to: path.length - 1 });
-
-  return rawSegments;
-}
-
-// === Time calculation ===
-function getTimePeriod(hour) {
-  if (hour >= 7 && hour < 9) return 'rush';
-  if (hour >= 17 && hour < 19) return 'rush';
-  if (hour >= 9 && hour < 17) return 'day';
-  if (hour >= 19 && hour < 23) return 'night';
-  return 'early'; // 5-7 or 23-5
-}
-
-function getFrequency(lineName, hour) {
-  if (!freqData) return 10;
-  const period = getTimePeriod(hour);
-  const lineFreq = freqData.lines[lineName];
-  if (lineFreq) return lineFreq[period];
-  return freqData.default[period];
-}
-
-// Get best train type for a line
-function getTrainType(lineName) {
-  if (!trainTypes || !trainTypes.types[lineName]) return { type: '各停', speed_factor: 1.0 };
-  // Return the fastest type available
-  const types = trainTypes.types[lineName];
-  return types[0]; // First entry is fastest
-}
-
-// Normalize line name for timetable matching
-function normalizeLine(s) {
-  return s.replace(/ＪＲ/g, '').replace(/東京メトロ/g, '').replace(/都営地下鉄/g, '都営');
-}
-
-// Find next departure from timetable for a station/line after given time
-function findNextDeparture(stationId, lineName, afterMinutes) {
-  if (!timetableData) return null;
-  const dirs = timetableData[String(stationId)];
-  if (!dirs) return null;
-
-  const normLine = normalizeLine(lineName);
-  // Find matching direction(s)
-  for (const d of dirs) {
-    const dirLine = d.dir.split('　')[0].split(' ')[0]; // split on fullwidth or halfwidth space
-    const normDir = normalizeLine(dirLine);
-    if (normDir === normLine || normDir.includes(normLine) || normLine.includes(normDir)) {
-      // Binary search for next departure >= afterMinutes
-      const deps = d.deps;
-      let lo = 0, hi = deps.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (deps[mid] < afterMinutes) lo = mid + 1;
-        else hi = mid;
-      }
-      if (lo < deps.length) {
-        return deps[lo];
-      }
-    }
-  }
-  return null;
-}
-
-function calculateTimes(path, lineSegments, startMinutes) {
-  const segTimes = [];
-  let currentTime = startMinutes;
-
-  for (let si = 0; si < lineSegments.length; si++) {
-    const seg = lineSegments[si];
-    const stationCount = seg.to - seg.from;
-    const fromStationId = path[seg.from].id;
-
-    const prevSeg = si > 0 ? lineSegments[si - 1] : null;
-    const isThrough = prevSeg && isThroughService(prevSeg.line, seg.line);
-
-    // Try real timetable first
-    let depTime = null;
-    let usedTimetable = false;
-
-    if (!isThrough || si === 0) {
-      const nextDep = findNextDeparture(fromStationId, seg.line, Math.ceil(currentTime));
-      if (nextDep !== null) {
-        depTime = nextDep;
-        usedTimetable = true;
-      }
-    }
-
-    // Fallback to frequency-based estimate
-    if (depTime === null) {
-      if (si === 0 || isThrough) {
-        depTime = currentTime;
-      } else {
-        const hour = Math.floor(currentTime / 60) % 24;
-        const freq = getFrequency(seg.line, hour);
-        depTime = currentTime + Math.round(freq / 2);
-      }
-    }
-
-    const waitTime = Math.round(depTime - currentTime);
-
-    // Travel time: use timetable at arrival station if possible
-    const toStationId = path[seg.to].id;
-    let arrTime = null;
-
-    if (usedTimetable) {
-      // Try to find arrival by looking at destination station's timetable
-      // for the same line, finding a departure close to expected arrival
-      const tt = getTrainType(seg.line);
-      const estTravel = stationCount * 2.5 * tt.speed_factor;
-      arrTime = depTime + Math.round(estTravel);
-    }
-
-    if (arrTime === null) {
-      const tt = getTrainType(seg.line);
-      const travelTime = stationCount * 2.5 * tt.speed_factor;
-      arrTime = depTime + travelTime;
-    }
-
-    const travelTime = Math.round(arrTime - depTime);
-    const tt = getTrainType(seg.line);
-
-    segTimes.push({
-      depTime: Math.round(depTime),
-      arrTime: Math.round(arrTime),
-      waitTime: Math.max(0, waitTime),
-      travelTime,
-      trainType: tt.type,
-      fromTimetable: usedTimetable,
-    });
-
-    currentTime = arrTime;
-    if (si < lineSegments.length - 1 && !isThroughService(seg.line, lineSegments[si+1].line)) {
-      currentTime += 3; // Transfer walk time only for real transfers
-    }
-  }
-
-  return segTimes;
-}
-
-// Calculate fare for a route
-function calculateFare(path, lineSegments) {
-  if (!fareData) return null;
-
-  let totalFare = 0;
-  const fareBreakdown = [];
-
-  // Build company lookup
-  const lineToCompany = {};
-  for (const [company, data] of Object.entries(fareData.companies)) {
-    for (const lineName of data.match) {
-      lineToCompany[lineName] = company;
-    }
-  }
-
-  // Calculate distance per company segment
-  // Through-service does NOT merge companies for fare — you pay each company separately
-  let currentCompany = '';
-  let companyDist = 0;
-
-  for (let si = 0; si < lineSegments.length; si++) {
-    const seg = lineSegments[si];
-    const company = lineToCompany[seg.line] || '';
-
-    // Calculate segment distance
-    let segDist = 0;
-    for (let i = seg.from + 1; i <= seg.to; i++) {
-      const fromId = path[i-1].id;
-      const toId = path[i].id;
-      const edges = graph.edges[fromId];
-      if (edges) {
-        const e = edges.find(e => e[0] === toId);
-        if (e) segDist += e[1];
-      }
-    }
-    const segDistKm = segDist / 1000;
-
-    // Same company: accumulate distance
-    if (company === currentCompany) {
-      companyDist += segDistKm;
-    } else {
-      // Different company: finalize previous, start new
-      if (currentCompany && companyDist > 0) {
-        const fare = lookupFare(currentCompany, companyDist);
-        totalFare += fare;
-        fareBreakdown.push({ company: currentCompany, dist: companyDist, fare });
-      }
-      currentCompany = company || 'その他';
-      companyDist = segDistKm;
-    }
-  }
-
-  // Finalize last
-  if (currentCompany && companyDist > 0) {
-    const fare = lookupFare(currentCompany, companyDist);
-    totalFare += fare;
-    fareBreakdown.push({ company: currentCompany, dist: companyDist, fare });
-  }
-
-  return { total: totalFare, breakdown: fareBreakdown };
-}
-
-function lookupFare(company, distKm) {
-  if (!fareData) return Math.round(distKm * 25);
-  const companyData = fareData.companies[company];
-  if (!companyData) return Math.round(distKm * (fareData.default_fare_per_km || 25));
-  const table = companyData.ic_fare;
-  for (const [maxDist, fare] of table) {
-    if (distKm <= maxDist) return fare;
-  }
-  return table[table.length - 1][1]; // Max fare
-}
+// Routing/time/fare logic lives in router.js — thin aliases for the UI code
+const dijkstra = (s, e, banned) => Router.dijkstra(s, e, banned);
+const findKRoutes = (s, e, k) => Router.findKRoutes(s, e, k);
+const detectLineSegments = (path) => Router.detectLineSegments(path);
+const calculateTimes = (path, segs, t) => Router.calculateTimes(path, segs, t);
+const calculateFare = (path, segs) => Router.calculateFare(path, segs);
+const isThroughService = (a, b) => Router.isThroughService(a, b);
 
 function formatTime(minutes) {
   const h = Math.floor(minutes / 60) % 24;
@@ -1185,7 +792,7 @@ function renderOneRoute(result, index, searchTime) {
   html += `<div class="route-summary" onclick="toggleRoute('${routeId}')" style="cursor:pointer">
     <div style="flex:1">
       <div style="font-size:20px;font-weight:700;color:var(--blue)">${depTimeStr} → ${arrTimeStr}</div>
-      <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${transferCount > 0 ? transferCount + '回乗換' : '直通'} / ${(distance/1000).toFixed(1)}km</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${transferCount > 0 ? transferCount + '回乗換' : '直通'} / ${Router.pathKm(path, 0, path.length - 1).toFixed(1)}km</div>
     </div>
     ${fareStr ? `<div style="font-size:18px;font-weight:700;color:var(--text)">${fareStr}</div>` : ''}
   </div>`;
@@ -1238,7 +845,7 @@ function renderOneRoute(result, index, searchTime) {
         <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${depT}</span>${fromStn.n}</div>
         <div class="step-info">
           <span class="line-tag" style="background:${color}11;color:${color}">${lineName}</span>
-          ${st.trainType !== '各停' && st.trainType !== '普通' ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${st.trainType}</span>` : ''}
+          ${st.trainType ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${st.trainType}</span>` : ''}
           ${stationCount}駅 ${st.travelTime}分${st.waitTime > 0 ? ` <span style="color:var(--orange)">(待${st.waitTime}分${st.fromTimetable ? '' : '≈'})</span>` : ''}
         </div>
         ${throughNext ? `<div style="margin-top:4px;font-size:11px;color:var(--green);font-weight:500">↓ ${nextSeg.line} に直通・乗換不要</div>` : ''}
@@ -1332,7 +939,7 @@ if ('serviceWorker' in navigator) {
   // Check offline readiness
   window.addEventListener('load', async () => {
     if ('caches' in window) {
-      const cache = await caches.open('transit-v8');
+      const cache = await caches.open('transit-v9');
       const keys = await cache.keys();
       const statusEl = document.getElementById('status');
       if (keys.length >= 4) { // index.html + graph.json + frequency.json + through_service.json minimum

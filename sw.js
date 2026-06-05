@@ -1,13 +1,14 @@
-const CACHE_NAME = 'transit-v8';
+const CACHE_NAME = 'transit-v10';
 const ASSETS = [
   './',
   './index.html',
-  './graph.json',
+  './router.js',
+  './graph_v2.json',
   './frequency.json',
   './through_service.json',
   './train_types.json',
   './fares.json',
-  './timetable.json',
+  './timetable_v2.json',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
