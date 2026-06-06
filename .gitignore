@@ -11,3 +11,5 @@ timetable_raw.json
 ekitan_stations.json
 *.b64
 *.log
+__pycache__/
+gapfill_state.json
