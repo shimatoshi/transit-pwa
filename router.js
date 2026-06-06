@@ -15,7 +15,7 @@
 
 const TRANSFER_PENALTY = 6; // minutes: routing cost of changing lines
 const TRANSFER_WALK = 3;    // minutes: walk time shown at a real transfer
-const RAIL_KM_FACTOR = 1.2; // rail km ≈ straight-line km × 1.2
+const RAIL_KM_FACTOR = 1.12; // rail km ≈ straight-line km × 1.12 (ジョルダン実測10区間で校正、中央値1.14・外れ値除き1.12)
 const KM_PER_MIN = 0.75;    // ~45km/h fallback when coords are missing
 
 // Loaded datasets. Set via Router.setData(key, value).
