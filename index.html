@@ -422,7 +422,7 @@ body {
 
 <div class="status-bar" id="status">データ読み込み中...</div>
 
-<script src="router.js?v=5"></script>
+<script src="router_v3.js?v=1"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -439,30 +439,33 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // === Data Loading ===
-// Load supplementary data (all routing logic lives in router.js)
-fetch('frequency.json?v=1').then(r => r.json()).then(d => { freqData = d; Router.setData('freq', d); });
-fetch('train_types.json?v=1').then(r => r.json()).then(d => { Router.setData('trainTypes', d); });
-fetch('fares.json?v=1').then(r => r.json()).then(d => { Router.setData('fares', d); });
-fetch('timetable_v2.json?v=3').then(r => r.json()).then(d => {
-  Router.setData('timetable', d);
-  console.log(`Timetable loaded: ${d.stats.stations_with_tt} stations, ${d.stats.total_departures} departures`);
-});
-fetch('through_service.json?v=1').then(r => r.json()).then(d => {
-  Router.setData('through', d);
-  console.log(`Through-service pairs loaded: ${d.pairs.length}`);
-});
+// 実在列車データ(CSA): trains_v3.bin.gz + meta + graph(駅名) + fares
+async function fetchBin(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  let buf = await res.arrayBuffer();
+  const u8 = new Uint8Array(buf);
+  if (u8[0] === 0x1f && u8[1] === 0x8b) { // gzip magic → 手動解凍
+    const ds = new DecompressionStream('gzip');
+    const stream = new Response(buf).body.pipeThrough(ds);
+    buf = await new Response(stream).arrayBuffer();
+  }
+  return buf;
+}
 
-fetch('graph_v2.json?v=1')
-  .then(r => r.json())
-  .then(data => {
-    graph = data;
-    Router.setData('graph', data);
+(async () => {
+  try {
+    const [graphData, meta, fares, bin] = await Promise.all([
+      fetch('graph_v2.json?v=1').then(r => r.json()),
+      fetch('trains_v3_meta.json?v=1').then(r => r.json()),
+      fetch('fares.json?v=2').then(r => r.json()),
+      fetchBin('trains_v3.bin.gz?v=1'),
+    ]);
+    graph = graphData;
     // Pre-build name index for fast search
     graph._nameIndex = [];
-    let withLines = 0;
     for (let i = 0; i < graph.stations.length; i++) {
       const s = graph.stations[i];
-      if (s.l && s.l.length > 0) withLines++;
       graph._nameIndex.push({
         id: i,
         name: s.n,
@@ -471,16 +474,18 @@ fetch('graph_v2.json?v=1')
         lines: s.l,
       });
     }
+    RouterV3.loadBinary(bin, meta, graph.stations, fares);
+    const nTrips = meta.trips.l.length;
     document.getElementById('badge').textContent = `${graph.stats.stations}駅`;
     document.getElementById('status').textContent =
-      `${graph.stats.stations}駅 / ${graph.stats.lines}路線 / オフライン対応`;
+      `${graph.stats.stations}駅 / ${nTrips.toLocaleString()}本の列車 / オフライン対応`;
     document.getElementById('search-btn').disabled = false;
-    console.log(`Graph loaded: ${graph.stats.stations} stations, ${withLines} with lines, ${graph.stats.lines} lines`);
+    console.log(`CSA loaded: ${RouterV3.data.nConn} connections, ${nTrips} trips`);
     initAutocomplete();
-  })
-  .catch((e) => {
+  } catch (e) {
     document.getElementById('status').textContent = 'データ読み込みエラー: ' + e.message;
-  });
+  }
+})();
 
 // === Autocomplete ===
 function searchStations(query) {
@@ -635,10 +640,6 @@ function saveOpts() {
 })();
 
 function doSearch() {
-  Router.setOptions({
-    express: document.getElementById('opt-express').checked,
-    shinkansen: document.getElementById('opt-shinkansen').checked,
-  });
   const rows = document.querySelectorAll('.field-row');
   const waypointCandidates = [];
 
@@ -682,96 +683,91 @@ function doSearch() {
     return;
   }
 
-  // For direct (no via) routes, find multiple alternatives
+  const st = getSearchTime();
+  const opts = {
+    express: document.getElementById('opt-express').checked,
+    shinkansen: document.getElementById('opt-shinkansen').checked,
+  };
+
+  // 到着指定: 指定時刻までに着く最遅出発を二分探索
+  function latestDeparture(f, t, arrBy) {
+    let lo = arrBy - 480, hi = arrBy, best = null;
+    const ok = j => j && j.arr <= arrBy;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      const j = RouterV3.query(f, t, mid, opts);
+      if (ok(j)) { best = j; lo = j.dep > mid ? j.dep : mid; }
+      else hi = mid;
+      if (best && best.dep === lo && lo + 1 >= hi) break;
+    }
+    return best;
+  }
+
   if (waypointCandidates.length === 2) {
-    const allRoutes = [];
+    const journeys = [];
+    const sigs = new Set();
     for (const fid of waypointCandidates[0]) {
       for (const tid of waypointCandidates[1]) {
         if (fid === tid) continue;
-        const routes = findKRoutes(fid, tid, 6);
-        allRoutes.push(...routes);
-      }
-    }
-
-    // Deduplicate by line+type signature (急行経路と各停経路は別ルートとして残す)
-    const unique = [];
-    const sigs = new Set();
-    for (const r of allRoutes) {
-      const segs = detectLineSegments(r.path);
-      const sig = segs.map(s => s.line + ':' + Router.segTrainType(r.path, s)).join('|');
-      if (!sigs.has(sig)) {
-        sigs.add(sig);
-        // Pre-calculate estimated time for sorting
-        const segTimes = calculateTimes(r.path, segs, getSearchTime().minutes);
-        r._estTime = segTimes[segTimes.length - 1].arrTime - segTimes[0].depTime;
-        r._dep = segTimes[0].depTime;
-        r._arr = segTimes[segTimes.length - 1].arrTime;
-        r._transfers = 0;
-        for (let i = 1; i < segs.length; i++) {
-          if (!isThroughService(segs[i-1].line, segs[i].line)) r._transfers++;
+        let found;
+        if (st.type === 'arr') {
+          const j = latestDeparture(fid, tid, st.minutes);
+          found = j ? [j] : [];
+        } else {
+          found = RouterV3.findJourneys(fid, tid, st.minutes, opts);
         }
-        unique.push(r);
+        for (const j of found) {
+          const sig = j.dep + '|' + j.arr + '|' +
+            j.legs.map(l => l.kind === 'ride' ? l.line + l.dep : 'w').join('>');
+          if (!sigs.has(sig)) { sigs.add(sig); journeys.push(j); }
+        }
       }
     }
-
-    // Sort by: 到着時刻優先(待ち時間込み)。僅差なら出発が遅い方→乗換少ない方
-    unique.sort((a, b) => {
-      const arrDiff = a._arr - b._arr;
-      if (Math.abs(arrDiff) > 5) return arrDiff; // 早く着く方
-      const depDiff = b._dep - a._dep;
-      if (Math.abs(depDiff) > 5) return depDiff; // 同着なら出発が遅い方
-      return a._transfers - b._transfers; // 僅差なら乗換少ない方
+    journeys.sort((a, b) => {
+      if (st.type === 'arr') {
+        if (Math.abs(b.dep - a.dep) > 5) return b.dep - a.dep; // 遅く出る方
+      }
+      if (Math.abs(a.arr - b.arr) > 5) return a.arr - b.arr;
+      if (Math.abs(b.dep - a.dep) > 5) return b.dep - a.dep;
+      return a.transfers - b.transfers;
     });
-
-    if (unique.length === 0) {
+    if (!journeys.length) {
       const fn = graph.stations[waypointCandidates[0][0]].n;
       const tn = graph.stations[waypointCandidates[1][0]].n;
       document.getElementById('results').innerHTML =
         `<div class="no-route">${fn} → ${tn} の経路が見つかりません</div>`;
       return;
     }
-    renderMultipleResults(unique);
+    renderMultipleResults(journeys);
   } else {
-    // Via route: single best path through all waypoints
-    let totalPath = [];
-    let totalDist = 0;
-
+    // 経由駅: 区間ごとに最早到着を連結
+    let combined = null;
+    let depMin = st.minutes;
     for (let i = 0; i < waypointCandidates.length - 1; i++) {
-      const fromC = waypointCandidates[i];
-      const toC = waypointCandidates[i + 1];
-      let bestResult = null;
-      for (const fid of fromC) {
-        for (const tid of toC) {
+      let best = null;
+      for (const fid of waypointCandidates[i]) {
+        for (const tid of waypointCandidates[i + 1]) {
           if (fid === tid) continue;
-          const result = dijkstra(fid, tid, null);
-          if (result && (!bestResult || result.distance < bestResult.distance)) {
-            bestResult = result;
-          }
+          const j = RouterV3.query(fid, tid, depMin, opts);
+          if (j && (!best || j.arr < best.arr)) best = j;
         }
       }
-      if (!bestResult) {
+      if (!best) {
         document.getElementById('results').innerHTML =
           `<div class="no-route">経路が見つかりません</div>`;
         return;
       }
-      if (totalPath.length > 0) {
-        totalPath = totalPath.concat(bestResult.path.slice(1));
-      } else {
-        totalPath = bestResult.path;
+      if (!combined) combined = best;
+      else {
+        combined.legs.push(...best.legs);
+        combined.arr = best.arr;
+        combined.transfers += best.transfers + 1;
       }
-      totalDist += bestResult.distance;
+      depMin = best.arr + 4;
     }
-    renderMultipleResults([{ path: totalPath, distance: totalDist }]);
+    renderMultipleResults([combined]);
   }
 }
-
-// Routing/time/fare logic lives in router.js — thin aliases for the UI code
-const dijkstra = (s, e, banned) => Router.dijkstra(s, e, banned);
-const findKRoutes = (s, e, k) => Router.findKRoutes(s, e, k);
-const detectLineSegments = (path) => Router.detectLineSegments(path);
-const calculateTimes = (path, segs, t) => Router.calculateTimes(path, segs, t);
-const calculateFare = (path, segs) => Router.calculateFare(path, segs);
-const isThroughService = (a, b) => Router.isThroughService(a, b);
 
 function formatTime(minutes) {
   const h = Math.floor(minutes / 60) % 24;
@@ -803,125 +799,102 @@ function lineColor(name) {
   return LINE_COLORS[Math.abs(hash) % LINE_COLORS.length];
 }
 
-// === Rendering ===
-function renderOneRoute(result, index, searchTime) {
-  const { path, distance } = result;
-  const lineSegments = detectLineSegments(path);
-
-  // Calculate times
-  const segTimes = calculateTimes(path, lineSegments, searchTime.minutes);
-  const depTimeStr = formatTime(segTimes[0].depTime);
-  const arrTimeStr = formatTime(segTimes[segTimes.length - 1].arrTime);
-  const totalMin = Math.round(segTimes[segTimes.length - 1].arrTime - segTimes[0].depTime);
-  // Count real transfers (exclude through-service)
-  let transferCount = 0;
-  for (let i = 1; i < lineSegments.length; i++) {
-    if (!isThroughService(lineSegments[i-1].line, lineSegments[i].line)) {
-      transferCount++;
-    }
-  }
+// === Rendering (journey = RouterV3.findJourneys の結果) ===
+function renderOneRoute(j, index) {
+  const depStr = formatTime(j.dep);
+  const arrStr = formatTime(j.arr);
+  const totalMin = j.arr - j.dep;
+  const km = RouterV3.journeyKm(j);
+  const fare = RouterV3.journeyFare(j);
+  const rides = j.legs.filter(l => l.kind === 'ride');
 
   const routeId = 'route-' + index;
   let html = `<div class="route-card">`;
 
-  // Fare calculation
-  const fareInfo = calculateFare(path, lineSegments);
-  const fareStr = fareInfo ? `¥${fareInfo.total.toLocaleString()}` : '';
-
-  // Summary (clickable to toggle detail)
   html += `<div class="route-summary" onclick="toggleRoute('${routeId}')" style="cursor:pointer">
     <div style="flex:1">
-      <div style="font-size:20px;font-weight:700;color:var(--blue)">${depTimeStr} → ${arrTimeStr}</div>
-      <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${transferCount > 0 ? transferCount + '回乗換' : '直通'} / ${Router.pathKm(path, 0, path.length - 1).toFixed(1)}km</div>
+      <div style="font-size:20px;font-weight:700;color:var(--blue)">${depStr} → ${arrStr}</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${j.transfers > 0 ? j.transfers + '回乗換' : '直通'} / ${km.toFixed(1)}km</div>
     </div>
-    ${fareStr ? `<div style="font-size:18px;font-weight:700;color:var(--text)">${fareStr}</div>` : ''}
+    <div style="font-size:18px;font-weight:700;color:var(--text)">¥${fare.total.toLocaleString()}</div>
   </div>`;
 
-  // Line summary bar (mini colored line showing route composition)
-  const totalStops = path.length - 1;
+  // Line summary bar
+  const totalStops = rides.reduce((s, l) => s + l.stops.length - 1, 0) || 1;
   html += `<div style="display:flex;height:4px;margin:0 16px 8px;border-radius:2px;overflow:hidden">`;
-  for (const seg of lineSegments) {
-    const pct = ((seg.to - seg.from) / totalStops * 100).toFixed(1);
-    html += `<div style="width:${pct}%;background:${lineColor(seg.line)}"></div>`;
+  for (const l of rides) {
+    const pct = ((l.stops.length - 1) / totalStops * 100).toFixed(1);
+    html += `<div style="width:${pct}%;background:${lineColor(l.line)}"></div>`;
   }
   html += `</div>`;
 
-  // Route line names summary
-  const lineNames = lineSegments.map(s => {
-    const n = s.line === '_rail' ? '鉄道' : s.line;
-    return `<span class="line-tag" style="background:${lineColor(s.line)}11;color:${lineColor(s.line)};margin:2px">${n}</span>`;
-  }).join('→');
+  const lineNames = rides.map(l =>
+    `<span class="line-tag" style="background:${lineColor(l.line)}11;color:${lineColor(l.line)};margin:2px">${l.line}</span>`
+  ).join('→');
   html += `<div style="padding:0 16px 10px;font-size:12px;line-height:1.8">${lineNames}</div>`;
 
-  // Detail (collapsed by default for 2nd+ routes)
   const collapsed = index > 0 ? ' collapsed' : '';
   html += `<div class="route-detail${collapsed}" id="${routeId}">`;
 
-  for (let si = 0; si < lineSegments.length; si++) {
-    const seg = lineSegments[si];
-    const fromStn = graph.stations[path[seg.from].id];
-    const toStn = graph.stations[path[seg.to].id];
-    const isLast = si === lineSegments.length - 1;
-    const stationCount = seg.to - seg.from;
-    const lineName = seg.line === '_rail' ? '鉄道' :
-                     seg.line === '_transfer' ? '乗換' :
-                     seg.line === '_walk' ? '徒歩' : seg.line;
-    const color = lineColor(seg.line);
-
-    const st = segTimes[si];
-    const depT = formatTime(st.depTime);
-    const arrT = formatTime(st.arrTime);
-
-    // Check if next segment is through-service (no transfer needed)
-    const nextSeg = si < lineSegments.length - 1 ? lineSegments[si + 1] : null;
-    const throughNext = nextSeg && isThroughService(seg.line, nextSeg.line);
-
+  let prevArr = null;
+  for (let li = 0; li < j.legs.length; li++) {
+    const leg = j.legs[li];
+    if (leg.kind === 'walk') {
+      const fn = graph.stations[leg.from].n, tn = graph.stations[leg.to].n;
+      html += `<div class="step">
+        <div class="step-line"><div class="step-dot walk"></div><div class="step-bar walk"></div></div>
+        <div class="step-content">
+          <div class="step-station" style="font-size:13px">${fn} → ${tn}</div>
+          <div class="step-info">徒歩 約${leg.min}分</div>
+        </div>
+      </div>`;
+      if (prevArr != null) prevArr += leg.min;
+      continue;
+    }
+    const fromStn = graph.stations[leg.from], toStn = graph.stations[leg.to];
+    const color = lineColor(leg.line);
+    const wait = prevArr != null ? leg.dep - prevArr : 0;
     html += `<div class="step">
       <div class="step-line">
         <div class="step-dot" style="background:${color};box-shadow:0 0 0 2px ${color}"></div>
         <div class="step-bar" style="background:${color}"></div>
       </div>
       <div class="step-content">
-        <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${depT}</span>${fromStn.n}</div>
+        <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${formatTime(leg.dep)}</span>${fromStn.n}</div>
         <div class="step-info">
-          <span class="line-tag" style="background:${color}11;color:${color}">${lineName}</span>
-          ${st.trainType ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${st.trainType}</span>` : ''}
-          ${stationCount}駅 ${st.travelTime}分${st.waitTime > 0 ? ` <span style="color:var(--orange)">(待${st.waitTime}分${st.fromTimetable ? '' : '≈'})</span>` : ''}
+          <span class="line-tag" style="background:${color}11;color:${color}">${leg.line}</span>
+          ${leg.type ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${leg.type}</span>` : ''}
+          ${leg.dest ? `<span style="font-size:11px">${leg.dest}行</span>` : ''}
+          ${leg.stops.length - 1}駅 ${leg.arr - leg.dep}分${wait > 0 ? ` <span style="color:var(--orange)">(待${wait}分)</span>` : ''}
         </div>
-        ${throughNext ? `<div style="margin-top:4px;font-size:11px;color:var(--green);font-weight:500">↓ ${nextSeg.line} に直通・乗換不要</div>` : ''}
       </div>
     </div>`;
-
-    if (isLast) {
-      html += `<div class="step">
-        <div class="step-line">
-          <div class="step-dot end"></div>
-          <div class="step-bar none"></div>
-        </div>
-        <div class="step-content">
-          <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${arrT}</span>${toStn.n}</div>
-          <div class="step-info">到着</div>
-        </div>
-      </div>`;
-    }
+    prevArr = leg.arr;
   }
+  const lastLeg = j.legs[j.legs.length - 1];
+  const goalStn = graph.stations[lastLeg.to];
+  html += `<div class="step">
+    <div class="step-line"><div class="step-dot end"></div><div class="step-bar none"></div></div>
+    <div class="step-content">
+      <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${formatTime(j.arr)}</span>${goalStn.n}</div>
+      <div class="step-info">到着</div>
+    </div>
+  </div>`;
 
-  html += `</div>`; // route-detail
-  html += `</div>`; // route-card
+  html += `</div></div>`;
   return html;
 }
 
 let allFoundRoutes = [];
 function renderMultipleResults(routes) {
   allFoundRoutes = routes;
-  const searchTime = getSearchTime();
   const showCount = Math.min(3, routes.length);
   let html = '';
   if (routes.length > 1) {
     html += `<div style="padding:4px 16px 0;font-size:13px;color:var(--muted)">${routes.length}件の経路</div>`;
   }
   for (let i = 0; i < showCount; i++) {
-    html += renderOneRoute(routes[i], i, searchTime);
+    html += renderOneRoute(routes[i], i);
   }
   if (routes.length > showCount) {
     html += `<button onclick="showMoreRoutes()" id="show-more-btn" style="
@@ -934,10 +907,9 @@ function renderMultipleResults(routes) {
 }
 
 function showMoreRoutes() {
-  const searchTime = getSearchTime();
   let html = `<div style="padding:4px 16px 0;font-size:13px;color:var(--muted)">${allFoundRoutes.length}件の経路</div>`;
   for (let i = 0; i < allFoundRoutes.length; i++) {
-    html += renderOneRoute(allFoundRoutes[i], i, searchTime);
+    html += renderOneRoute(allFoundRoutes[i], i);
   }
   document.getElementById('results').innerHTML = html;
 }
