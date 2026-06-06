@@ -6,7 +6,6 @@ train_data.json
 train_data.json.tmp
 train_urls.json
 timetable.json
-timetable_v2.json
 timetable_raw.json
 ekitan_stations.json
 *.b64
