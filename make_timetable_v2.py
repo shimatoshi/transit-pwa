@@ -21,7 +21,10 @@ Output: { data: { ekitan_id: [ {dir, via, deps} ] }, stats }
   dir : "ＪＲ山陽・九州新幹線 博多方面" (line + top destinations)
   via : ekitan ids of stops reachable in this direction (window union);
         router matches its toward-stations against this exactly
-  deps: sorted departure minutes
+  deps: { train_type: sorted departure minutes } — typed buckets so the
+        router can pick a departure matching the path's edge type (an
+        express-edge segment waits for a real 急行 instead of borrowing
+        a 普通's departure minute). '' = type unknown (old-scrape merge).
 
 Hybrid coverage merge: trains.json misses some trains (e.g. 九州新幹線
 through-runs), while the old per-station scrape (timetable.json) has full
@@ -67,10 +70,11 @@ def main():
         trains = json.load(f)['trains']
 
     # (sid, line) -> next_stop_id -> cluster
-    # cluster: {'win': set(ids), 'full': set(ids), 'deps': set(min), 'dest': Counter()}
+    # cluster: {'win': set(ids), 'full': set(ids), 'deps': {type: set(min)}, 'dest': Counter()}
     groups = defaultdict(dict)
     for t in trains:
         line, dest, stops = t['line'], t.get('dest') or '', t['stops']
+        ttype = t.get('type') or ''
         for i in range(len(stops) - 1):
             dep = stops[i]['d']
             if dep is None:
@@ -78,10 +82,10 @@ def main():
             sid = stops[i]['s']
             rest = [s['s'] for s in stops[i + 1:]]
             cl = groups[(sid, line)].setdefault(
-                rest[0], {'win': set(), 'full': set(), 'deps': set(), 'dest': Counter()})
+                rest[0], {'win': set(), 'full': set(), 'deps': {}, 'dest': Counter()})
             cl['win'].update(rest[:WINDOW])
             cl['full'].update(rest)
-            cl['deps'].add(dep % 1440)
+            cl['deps'].setdefault(ttype, set()).add(dep % 1440)
             cl['dest'][dest] += 1
 
     # merge same-direction clusters (overlapping windows) per (sid, line)
@@ -94,8 +98,10 @@ def main():
             for a in range(len(clusters)):
                 for b in range(len(clusters) - 1, a, -1):
                     if clusters[a]['win'] & clusters[b]['win']:
-                        for key in ('win', 'full', 'deps'):
+                        for key in ('win', 'full'):
                             clusters[a][key] |= clusters[b][key]
+                        for ty, mins in clusters[b]['deps'].items():
+                            clusters[a]['deps'].setdefault(ty, set()).update(mins)
                         clusters[a]['dest'] += clusters[b]['dest']
                         del clusters[b]
                         merged = True
@@ -180,12 +186,14 @@ def main():
                 # group (高柳/柏 東武野田線 etc.), so subtract every sibling
                 # cluster's minutes first: what remains can only belong to
                 # the target direction (costs a few same-minute collisions,
-                # never reintroduces opposite-direction departures).
+                # never reintroduces opposite-direction departures). Types
+                # are unknown for these, so they land in the '' bucket.
                 old_set = {d % 1440 for d in og['deps']}
                 for _ln, cl in cands:
-                    if cl is not target:
-                        old_set -= cl['deps']
-                target['deps'] |= old_set
+                    for mins in cl['deps'].values():
+                        old_set -= mins
+                if old_set:
+                    target['deps'].setdefault('', set()).update(old_set)
 
     out = defaultdict(list)
     for (sid, line), clusters in merged_groups.items():
@@ -200,7 +208,7 @@ def main():
             out[sid].append({
                 'dir': f'{line} {label}方面',
                 'via': sorted(cl['win'], key=int),
-                'deps': sorted(cl['deps']),
+                'deps': {ty: sorted(mins) for ty, mins in sorted(cl['deps'].items())},
             })
     for sid, glist in adopted.items():
         out[sid].extend(glist)
@@ -210,7 +218,9 @@ def main():
         'data': out,
         'stats': {
             'stations_with_tt': len(out),
-            'total_departures': sum(len(d['deps']) for dl in out.values() for d in dl),
+            'total_departures': sum(
+                sum(len(v) for v in d['deps'].values()) if isinstance(d['deps'], dict) else len(d['deps'])
+                for dl in out.values() for d in dl),
         },
     }
     path = os.path.join(BASE, 'timetable_v2.json')

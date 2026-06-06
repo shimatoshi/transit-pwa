@@ -89,7 +89,7 @@ function isThroughService(lineA, lineB) {
 }
 
 // --- Dijkstra (per-node label + line-change penalty approximation) ---
-function dijkstra(startId, endId, bannedEdges) {
+function dijkstra(startId, endId, bannedEdges, noTyped) {
   const graph = D.graph;
   const n = graph.stations.length;
   const dist = new Float64Array(n).fill(Infinity);
@@ -141,6 +141,7 @@ function dijkstra(startId, endId, bannedEdges) {
       const v = e[0], w = e[1], line = e[2];
       if (visited[v]) continue;
       if (bannedEdges && bannedEdges.has(u + ':' + v)) continue;
+      if (noTyped && e[3]) continue; // 各停代替探索: 優等エッジ除外
       if (!O.shinkansen && line.includes('新幹線')) continue;
       if (!O.express && isPaidExpressEdge(line, e[3])) continue;
 
@@ -184,7 +185,8 @@ function findKRoutes(startId, endId, k = 3) {
 
   function routeSignature(route) {
     const segs = detectLineSegments(route.path);
-    return segs.map(s => s.line).join('|');
+    // 種別込み: 同じ路線でも急行経路と各停経路は別ルート扱い
+    return segs.map(s => s.line + ':' + segTrainType(route.path, s)).join('|');
   }
   const seenSignatures = new Set([routeSignature(first)]);
 
@@ -218,6 +220,19 @@ function findKRoutes(startId, endId, k = 3) {
 
     seenSignatures.add(sig);
     routes.push(alt);
+  }
+
+  // 各停代替: 最短経路が優等エッジ(typed)を使っているなら、種別なしエッジ
+  // だけの経路も必ず1本候補に入れる(優等の運転間隔が開く時間帯はこちらが速い)
+  if (first.path.some(p => p.type)) {
+    const local = dijkstra(startId, endId, null, true);
+    if (local && local.distance <= first.distance * 3) {
+      const sig = routeSignature(local);
+      if (!seenSignatures.has(sig)) {
+        seenSignatures.add(sig);
+        routes.push(local);
+      }
+    }
   }
 
   return routes;
@@ -329,7 +344,21 @@ function getFrequency(lineName, hour) {
 }
 
 // --- timetable lookup (keyed by ekitan id via stations[].k) ---
-function findNextDeparture(stationIdx, lineName, afterMinutes, towardStations) {
+function nextInSorted(deps, afterMinutes) {
+  let lo = 0, hi = deps.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (deps[mid] < afterMinutes) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < deps.length ? deps[lo] : null;
+}
+
+// Returns {t, type} for the next departure, or null.
+// segType: the path edge's train type — with typed dep buckets we wait for a
+// real train of that type (an express edge must board an actual 急行, not
+// borrow a 普通's minute). '' bucket = type unknown (old-scrape merge).
+function findNextDeparture(stationIdx, lineName, afterMinutes, towardStations, segType) {
   if (!D.timetable) return null;
   const st = D.graph.stations[stationIdx];
   if (!st || !st.k) return null;
@@ -369,18 +398,24 @@ function findNextDeparture(stationIdx, lineName, afterMinutes, towardStations) {
 
   // Earliest departure across candidate groups (one physical direction can be
   // split into several groups when an express window doesn't overlap).
-  let bestDep = null;
+  let best = null;
   for (const [, d] of cands) {
     const deps = d.deps;
-    let lo = 0, hi = deps.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (deps[mid] < afterMinutes) lo = mid + 1;
-      else hi = mid;
+    if (Array.isArray(deps)) { // legacy / adopted old-scrape group (untyped)
+      const t = nextInSorted(deps, afterMinutes);
+      if (t !== null && (best === null || t < best.t)) best = { t, type: null };
+      continue;
     }
-    if (lo < deps.length && (bestDep === null || deps[lo] < bestDep)) bestDep = deps[lo];
+    let entries = Object.entries(deps);
+    if (segType && deps[segType]) {
+      entries = entries.filter(([ty]) => ty === segType || ty === '');
+    }
+    for (const [ty, arr] of entries) {
+      const t = nextInSorted(arr, afterMinutes);
+      if (t !== null && (best === null || t < best.t)) best = { t, type: ty || null };
+    }
   }
-  return bestDep;
+  return best;
 }
 
 // --- per-segment dep/arr times ---
@@ -398,16 +433,19 @@ function calculateTimes(path, lineSegments, startMinutes) {
     // Real timetable first (skip for through-running continuations)
     let depTime = null;
     let usedTimetable = false;
+    const edgeType = segTrainType(path, seg);
+    let actualType = null;
 
     if (!isThrough || si === 0) {
       const toward = [];
       for (let i = seg.from + 1; i <= seg.to; i++) {
         toward.push(D.graph.stations[path[i].id]);
       }
-      const nextDep = findNextDeparture(fromStationId, seg.line, Math.ceil(currentTime), toward);
+      const nextDep = findNextDeparture(fromStationId, seg.line, Math.ceil(currentTime), toward, edgeType);
       if (nextDep !== null) {
-        depTime = nextDep;
+        depTime = nextDep.t;
         usedTimetable = true;
+        actualType = nextDep.type;
       }
     }
 
@@ -432,7 +470,7 @@ function calculateTimes(path, lineSegments, startMinutes) {
       arrTime: Math.round(arrTime),
       waitTime: Math.max(0, waitTime),
       travelTime,
-      trainType: segTrainType(path, seg),
+      trainType: actualType || edgeType,
       fromTimetable: usedTimetable,
     });
 

@@ -58,7 +58,7 @@ function describeRoute(r, startMinutes) {
   }).join(' / ');
   return {
     summary: `${fmt(dep)}→${fmt(arr)} ${arr - dep}分 乗換${transfers} ${km.toFixed(1)}km ¥${fare ? fare.total : '?'}`,
-    lines, totalMin: arr - dep, transfers, km, fare: fare ? fare.total : null,
+    lines, totalMin: arr - dep, dep, arr, transfers, km, fare: fare ? fare.total : null,
     segCount: segs.length,
   };
 }
@@ -76,15 +76,19 @@ function searchBest(fromName, toName, startMinutes) {
   const unique = [];
   for (const r of all) {
     const segs = Router.detectLineSegments(r.path);
-    const sig = segs.map(s => s.line).join('|');
+    // 種別込みで重複判定: 同じ路線でも急行経路と各停経路は別ルートとして残す
+    const sig = segs.map(s => s.line + ':' + Router.segTrainType(r.path, s)).join('|');
     if (seen.has(sig)) continue;
     seen.add(sig);
     const d = describeRoute(r, startMinutes);
     unique.push({ r, d });
   }
+  // 到着時刻優先(検索時刻からの実所要)。僅差なら出発が遅い方→乗換少ない方
   unique.sort((a, b) => {
-    const td = a.d.totalMin - b.d.totalMin;
-    if (Math.abs(td) > 5) return td;
+    const ad = a.d.arr - b.d.arr;
+    if (Math.abs(ad) > 5) return ad;
+    const dd = b.d.dep - a.d.dep;
+    if (Math.abs(dd) > 5) return dd;
     return a.d.transfers - b.d.transfers;
   });
   return unique;
