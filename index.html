@@ -404,7 +404,7 @@ body {
 
 <div class="status-bar" id="status">データ読み込み中...</div>
 
-<script src="router.js?v=1"></script>
+<script src="router.js?v=2"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -425,7 +425,7 @@ document.addEventListener('DOMContentLoaded', () => {
 fetch('frequency.json?v=1').then(r => r.json()).then(d => { freqData = d; Router.setData('freq', d); });
 fetch('train_types.json?v=1').then(r => r.json()).then(d => { Router.setData('trainTypes', d); });
 fetch('fares.json?v=1').then(r => r.json()).then(d => { Router.setData('fares', d); });
-fetch('timetable_v2.json?v=1').then(r => r.json()).then(d => {
+fetch('timetable_v2.json?v=2').then(r => r.json()).then(d => {
   Router.setData('timetable', d);
   console.log(`Timetable loaded: ${d.stats.stations_with_tt} stations, ${d.stats.total_departures} departures`);
 });

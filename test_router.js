@@ -115,6 +115,10 @@ const CASES = [
   { from: '渋谷', to: '吉祥寺', at: 9 * 60, expectMin: [15, 50], maxTransfers: 1 },     // 井の頭線
   { from: '札幌', to: '小樽', at: 9 * 60, expectMin: [30, 90], maxTransfers: 1 },
   { from: '上野', to: '日暮里', at: 9 * 60, expectMin: [2, 20], maxTransfers: 1 },
+  // 方面グループ混在の回帰テスト: 深夜検索で柏方面始発05:13を拾うこと
+  // （旧データは船橋行04:50を誤って返していた）
+  { from: '高柳', to: '北千住', at: 1 * 60 + 40, expectMin: [25, 60], maxTransfers: 2,
+    expectDep: [5 * 60 + 10, 5 * 60 + 20] },
 ];
 
 let fail = 0;
@@ -135,11 +139,14 @@ for (const c of CASES) {
   const best = routes[0].d;
   const okTime = best.totalMin >= c.expectMin[0] && best.totalMin <= c.expectMin[1];
   const okTr = best.transfers <= c.maxTransfers;
-  const mark = okTime && okTr ? '✓' : '✗';
-  if (!(okTime && okTr)) fail++;
+  const dep = parseInt(best.summary.slice(0, 2), 10) * 60 + parseInt(best.summary.slice(3, 5), 10);
+  const okDep = !c.expectDep || (dep >= c.expectDep[0] && dep <= c.expectDep[1]);
+  const mark = okTime && okTr && okDep ? '✓' : '✗';
+  if (!(okTime && okTr && okDep)) fail++;
   console.log(`${mark} ${c.from}→${c.to}: ${best.summary}` +
     (okTime ? '' : `  [時間が範囲外 ${c.expectMin[0]}-${c.expectMin[1]}分]`) +
-    (okTr ? '' : `  [乗換多すぎ >${c.maxTransfers}]`));
+    (okTr ? '' : `  [乗換多すぎ >${c.maxTransfers}]`) +
+    (okDep ? '' : `  [発時刻が範囲外 ${fmt(c.expectDep[0])}-${fmt(c.expectDep[1])}]`));
   console.log(`   ${best.lines}`);
 }
 

@@ -308,7 +308,7 @@ function getFrequency(lineName, hour) {
 }
 
 // --- timetable lookup (keyed by ekitan id via stations[].k) ---
-function findNextDeparture(stationIdx, lineName, afterMinutes, towardNames) {
+function findNextDeparture(stationIdx, lineName, afterMinutes, towardStations) {
   if (!D.timetable) return null;
   const st = D.graph.stations[stationIdx];
   if (!st || !st.k) return null;
@@ -316,32 +316,50 @@ function findNextDeparture(stationIdx, lineName, afterMinutes, towardNames) {
   if (!dirs) return null;
 
   const cLine = canonLine(lineName);
-  // Score directions: line must match; prefer a direction whose 「○○方面」
-  // mentions a station we are actually heading toward.
-  let best = null, bestScore = -1;
+  // Score directions: line must match. Prefer `via` (exact ekitan-id match of
+  // stations we're actually heading toward); fall back to 「○○方面」 label text.
+  const scored = [];
+  let bestScore = -1;
   for (const d of dirs) {
     const parts = d.dir.split(/[ 　]+/);
     const dirLine = canonLine(parts[0]);
     if (!(dirLine === cLine || dirLine.includes(cLine) || cLine.includes(dirLine))) continue;
     let score = 1;
-    if (towardNames) {
-      const rest = parts.slice(1).join('');
-      for (const nm of towardNames) {
-        if (nm && rest.includes(nm)) { score = 2; break; }
+    if (towardStations) {
+      if (d.via) {
+        for (const ts of towardStations) {
+          if (ts && ts.k && d.via.includes(ts.k)) { score = 2; break; }
+        }
+      } else {
+        const rest = parts.slice(1).join('');
+        for (const ts of towardStations) {
+          if (ts && ts.n && rest.includes(ts.n)) { score = 2; break; }
+        }
       }
     }
-    if (score > bestScore) { bestScore = score; best = d; }
+    if (score > bestScore) bestScore = score;
+    scored.push([score, d]);
   }
-  if (!best) return null;
+  // Direction unconfirmed (score 1) with several candidates: using any of
+  // them risks an opposite-direction departure — let the frequency fallback
+  // estimate instead. A single score-1 group (terminus etc.) is safe.
+  const cands = scored.filter(([s]) => s === bestScore);
+  if (!cands.length || (bestScore === 1 && cands.length > 1)) return null;
 
-  const deps = best.deps;
-  let lo = 0, hi = deps.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (deps[mid] < afterMinutes) lo = mid + 1;
-    else hi = mid;
+  // Earliest departure across candidate groups (one physical direction can be
+  // split into several groups when an express window doesn't overlap).
+  let bestDep = null;
+  for (const [, d] of cands) {
+    const deps = d.deps;
+    let lo = 0, hi = deps.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (deps[mid] < afterMinutes) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo < deps.length && (bestDep === null || deps[lo] < bestDep)) bestDep = deps[lo];
   }
-  return lo < deps.length ? deps[lo] : null;
+  return bestDep;
 }
 
 // --- per-segment dep/arr times ---
@@ -363,7 +381,7 @@ function calculateTimes(path, lineSegments, startMinutes) {
     if (!isThrough || si === 0) {
       const toward = [];
       for (let i = seg.from + 1; i <= seg.to; i++) {
-        toward.push(D.graph.stations[path[i].id].n);
+        toward.push(D.graph.stations[path[i].id]);
       }
       const nextDep = findNextDeparture(fromStationId, seg.line, Math.ceil(currentTime), toward);
       if (nextDep !== null) {
