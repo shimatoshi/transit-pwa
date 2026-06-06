@@ -186,6 +186,20 @@ body {
   cursor: pointer;
   margin-left: auto;
 }
+.opt-toggles {
+  display: flex;
+  gap: 14px;
+  padding: 0 12px 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.opt-toggles label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.opt-toggles input { accent-color: var(--blue); }
 .search-btn {
   width: 100%;
   padding: 13px;
@@ -392,6 +406,10 @@ body {
     <button class="add-via-btn" onclick="addVia()">+ 経由駅</button>
     <button class="swap-btn" onclick="swapDepArr()">入替</button>
   </div>
+  <div class="opt-toggles">
+    <label><input type="checkbox" id="opt-express" checked onchange="saveOpts()"> 特急を使う</label>
+    <label><input type="checkbox" id="opt-shinkansen" checked onchange="saveOpts()"> 新幹線を使う</label>
+  </div>
   <button class="search-btn" id="search-btn" onclick="doSearch()" disabled>検索</button>
 </div>
 
@@ -404,7 +422,7 @@ body {
 
 <div class="status-bar" id="status">データ読み込み中...</div>
 
-<script src="router.js?v=2"></script>
+<script src="router.js?v=3"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -602,7 +620,25 @@ function findAllByName(name) {
 }
 
 // === Search ===
+function saveOpts() {
+  localStorage.setItem('routeOpts', JSON.stringify({
+    express: document.getElementById('opt-express').checked,
+    shinkansen: document.getElementById('opt-shinkansen').checked,
+  }));
+}
+(function restoreOpts() {
+  try {
+    const o = JSON.parse(localStorage.getItem('routeOpts') || '{}');
+    if (o.express === false) document.getElementById('opt-express').checked = false;
+    if (o.shinkansen === false) document.getElementById('opt-shinkansen').checked = false;
+  } catch (e) {}
+})();
+
 function doSearch() {
+  Router.setOptions({
+    express: document.getElementById('opt-express').checked,
+    shinkansen: document.getElementById('opt-shinkansen').checked,
+  });
   const rows = document.querySelectorAll('.field-row');
   const waypointCandidates = [];
 

@@ -28,6 +28,25 @@ const D = {
   through: new Set(), // canonical "a|b" line pairs with through-service
 };
 
+// Search options. Set via Router.setOptions({shinkansen, express}).
+const O = {
+  shinkansen: true, // allow 新幹線 edges
+  express: true,    // allow 有料特急 edges (ときわ/北斗/近鉄特急/ライナー等)
+};
+function setOptions(opts) { Object.assign(O, opts || {}); }
+
+// Free (no surcharge) train-type prefixes. Anything else with a typed edge is
+// a paid express: named JR trains (ときわ, くろしお…), 近鉄特急, ライナー系.
+// Bare 特急/直通特急/アクセス特急 are private-railway free expresses;
+// 特急(一部特別車) (名鉄) has free general cars.
+const FREE_TYPE_RE = /^(普通|各駅停車|各停|ワンマン|ＢＲＴ|BRT|バス|快速|新快速|区間快速|特別快速|通勤快速|快速急行|通勤急行|急行|区間急行|準急|区間準急|特快|通勤特快|中央特快|青梅特快|快特|エアポート|アクセス特急|直通特急|通勤特急|快速特急|特急)/;
+
+function isPaidExpressEdge(line, type) {
+  if (!type) return false;
+  if (line.includes('新幹線')) return false; // governed by O.shinkansen
+  return !FREE_TYPE_RE.test(type);
+}
+
 // --- line name normalization across datasets ---
 // graph_v2/timetable use ekitan names (ＪＲ常磐線, 都営浅草線, 京急本線),
 // fares/frequency/train_types/through_service use older mixed names
@@ -122,6 +141,8 @@ function dijkstra(startId, endId, bannedEdges) {
       const v = e[0], w = e[1], line = e[2];
       if (visited[v]) continue;
       if (bannedEdges && bannedEdges.has(u + ':' + v)) continue;
+      if (!O.shinkansen && line.includes('新幹線')) continue;
+      if (!O.express && isPaidExpressEdge(line, e[3])) continue;
 
       // Weights are real minutes — no speed-factor correction needed.
       // Penalize line changes unless the two lines run through-service.
@@ -495,6 +516,8 @@ function calculateFare(path, lineSegments) {
 
 const Router = {
   setData,
+  setOptions,
+  isPaidExpressEdge,
   canonLine,
   isThroughService,
   dijkstra,
