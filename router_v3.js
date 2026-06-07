@@ -328,19 +328,23 @@ function canonLine(s) {
     .replace(/[ 　]/g, '');
 }
 
-let _companyCanon = null;
+let _companyCanon = null, _companyPrefix = null;
 function lineCompany(line) {
   if (!D.fares) return '';
   if (!_companyCanon) {
     _companyCanon = {};
+    _companyPrefix = [];
     for (const [company, data] of Object.entries(D.fares.companies)) {
-      for (const name of data.match) _companyCanon[canonLine(name)] = company;
+      for (const name of (data.match || [])) _companyCanon[canonLine(name)] = company;
+      for (const p of (data.prefix || [])) _companyPrefix.push([canonLine(p), company]);
     }
+    // 最長プレフィクス優先 (例: 「京成スカイアクセス」>「京成」)
+    _companyPrefix.sort((a, b) => b[0].length - a[0].length);
   }
   const c = canonLine(line);
-  if (_companyCanon[c]) return _companyCanon[c];
-  for (const [name, company] of Object.entries(_companyCanon)) {
-    if (c.includes(name) || name.includes(c)) return company;
+  if (_companyCanon[c]) return _companyCanon[c]; // 例外はexact優先
+  for (const [p, company] of _companyPrefix) {
+    if (c.startsWith(p)) return company;
   }
   // 事業者プレフィクスで判定 (上野東京ライン・京浜東北・根岸線など
   // テーブルの路線名と一致しないＪＲ系統名対策)
@@ -353,6 +357,44 @@ function lineCompany(line) {
   if (line.includes('東京メトロ')) return '東京メトロ';
   if (line.includes('都営')) return '都営地下鉄';
   return '';
+}
+
+// JR地域会社の判定: 路線名は「ＪＲ東海道本線」のように会社を跨ぐため、
+// レグの停車駅重心から最近傍アンカー都市で会社を決める
+const JR_ANCHORS = [
+  ['JR北海道', 43.07, 141.35], ['JR北海道', 41.77, 140.73],
+  ['JR東日本', 39.70, 141.14], ['JR東日本', 38.26, 140.88],
+  ['JR東日本', 37.91, 139.06], ['JR東日本', 35.68, 139.77],
+  ['JR東日本', 36.65, 138.19], ['JR東日本', 34.97, 139.09], // 伊東(伊豆=JR東)
+  ['JR東日本', 35.67, 138.57], // 甲府
+  ['JR東海', 35.17, 136.88], ['JR東海', 34.97, 138.39],
+  ['JR東海', 36.14, 137.25], ['JR東海', 35.16, 138.68], // 高山・富士
+  ['JR西日本', 36.56, 136.66], ['JR西日本', 35.31, 136.29],
+  ['JR西日本', 34.70, 135.50], ['JR西日本', 35.49, 134.22],
+  ['JR西日本', 34.66, 133.92], ['JR西日本', 34.40, 132.47],
+  ['JR西日本', 33.95, 130.94], // 下関
+  ['JR四国', 34.35, 134.05], ['JR四国', 33.84, 132.77],
+  ['JR四国', 33.57, 133.54], ['JR四国', 34.07, 134.55],
+  ['JR九州', 33.89, 130.88], ['JR九州', 33.59, 130.42],
+  ['JR九州', 32.79, 130.69], ['JR九州', 31.59, 130.54],
+  ['JR九州', 33.24, 131.61],
+];
+
+function jrCompanyByGeo(stops) {
+  let la = 0, lo = 0, n = 0;
+  for (const s of stops) {
+    const st = D.stations[s.st];
+    if (st.la != null) { la += st.la; lo += st.lo; n++; }
+  }
+  if (!n) return 'JR東日本';
+  la /= n; lo /= n;
+  let best = 'JR東日本', bd = Infinity;
+  for (const [co, ala, alo] of JR_ANCHORS) {
+    const dla = la - ala, dlo = (lo - alo) * 0.82; // 経度の距離補正(緯度35度付近)
+    const d = dla * dla + dlo * dlo;
+    if (d < bd) { bd = d; best = co; }
+  }
+  return (D.fares && D.fares.companies[best]) ? best : 'JR東日本';
 }
 
 function lookupFare(company, distKm) {
@@ -387,22 +429,31 @@ function journeySurcharge(journey) {
 }
 
 function journeyFare(journey) {
-  let total = 0, company = null, dist = 0;
-  const breakdown = [];
+  // 会社ごとのセグメントに分割。JR同士は会社を跨いでも通算(実制度に近い)し、
+  // 全停車駅の重心で代表会社のテーブルを引く
+  const segs = [];
   for (const leg of journey.legs) {
     if (leg.kind !== 'ride') continue;
-    const c = lineCompany(leg.line);
+    let c = lineCompany(leg.line);
+    const isJR = /^(ＪＲ|JR)/.test(leg.line) || c.startsWith('JR');
+    if (isJR) c = jrCompanyByGeo(leg.stops);
     const km = legKm(leg);
-    if (c === company) { dist += km; continue; }
-    if (company !== null && dist > 0) {
-      const fare = lookupFare(company, dist);
-      total += fare; breakdown.push({ company, dist, fare });
+    const last = segs[segs.length - 1];
+    if (last && (last.company === c || (last.jr && isJR))) {
+      last.dist += km;
+      last.stops = last.stops.concat(leg.stops);
+      if (last.company !== c) last.mixed = true;
+    } else {
+      segs.push({ company: c, dist: km, jr: isJR, stops: leg.stops.slice(), mixed: false });
     }
-    company = c; dist = km;
   }
-  if (company !== null && dist > 0) {
-    const fare = lookupFare(company, dist);
-    total += fare; breakdown.push({ company, dist, fare });
+  let total = 0;
+  const breakdown = [];
+  for (const s of segs) {
+    if (s.dist <= 0) continue;
+    if (s.jr && s.mixed) s.company = jrCompanyByGeo(s.stops); // 跨いだら通算重心で再判定
+    const fare = lookupFare(s.company, s.dist);
+    total += fare; breakdown.push({ company: s.company, dist: s.dist, fare });
   }
   for (const s of journeySurcharge(journey)) {
     total += s.fare; breakdown.push(s);
