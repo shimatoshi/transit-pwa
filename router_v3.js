@@ -358,8 +358,9 @@ function lookupFare(company, distKm) {
   if (!D.fares) return Math.round(distKm * 25);
   const cd = D.fares.companies[company];
   if (!cd) return Math.round(distKm * (D.fares.default_fare_per_km || 25));
+  const km = Math.ceil(distKm); // 運賃計算は営業キロ切り上げ
   for (const [maxDist, fare] of cd.ic_fare) {
-    if (distKm <= maxDist) return fare;
+    if (km <= maxDist) return fare;
   }
   return cd.ic_fare[cd.ic_fare.length - 1][1];
 }
