@@ -13,7 +13,9 @@
 'use strict';
 
 const MIN_TRANSFER = 4;   // 同一駅乗換の標準バッファ(分)
-const RAIL_KM_FACTOR = 1.12;
+// 直線距離→営業キロの補正係数。2026-06に実営業キロ25区間で再校正(旧1.12は過大)。
+// 線形がうねる会社は fares.json の km_scale で追加補正
+const RAIL_KM_FACTOR = 1.06;
 const INF = 0x3fffffff;
 
 // 有料優等判定 (router.js と同一ロジック)
@@ -401,6 +403,7 @@ function lookupFare(company, distKm) {
   if (!D.fares) return Math.round(distKm * 25);
   const cd = D.fares.companies[company];
   if (!cd) return Math.round(distKm * (D.fares.default_fare_per_km || 25));
+  if (cd.km_scale) distKm *= cd.km_scale; // 会社別の線形補正(野田線・京成本線等)
   const km = Math.ceil(distKm); // 運賃計算は営業キロ切り上げ
   for (const [maxDist, fare] of cd.ic_fare) {
     if (km <= maxDist) return fare;
