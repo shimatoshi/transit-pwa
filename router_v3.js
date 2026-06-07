@@ -408,8 +408,9 @@ function lookupFare(company, distKm) {
   return cd.ic_fare[cd.ic_fare.length - 1][1];
 }
 
-// 加算運賃(空港アクセス等): 乗車起点/降車終点が対象駅かつ該当会社の利用なら加算
-function journeySurcharge(journey) {
+// 加算運賃(空港アクセス等): 乗車起点/降車終点が対象駅かつ該当会社の利用なら加算。
+// 会社はレグのラベルではなく解決済みセグメント(スカイライナーの本線ラベル誤り対策)
+function journeySurcharge(journey, firstCompany, lastCompany) {
   if (!D.fares || !D.fares.surcharges) return [];
   const rides = journey.legs.filter(l => l.kind === 'ride');
   if (!rides.length) return [];
@@ -421,41 +422,128 @@ function journeySurcharge(journey) {
     // company指定があれば該当会社の乗車時のみ(成田空港はJR利用なら加算なし)。
     // 駅名で一意な場合(羽田(京急)等)はcompany省略で直通列車のラベル揺れに耐える
     const hit =
-      (rule.stations.includes(oName) && (!rule.company || lineCompany(first.line) === rule.company)) ||
-      (rule.stations.includes(dName) && (!rule.company || lineCompany(last.line) === rule.company));
+      (rule.stations.includes(oName) && (!rule.company || firstCompany === rule.company)) ||
+      (rule.stations.includes(dName) && (!rule.company || lastCompany === rule.company));
     if (hit) out.push({ company: rule.label || rule.company + '(加算)', dist: 0, fare: rule.yen });
   }
   return out;
 }
 
+// 駅の所属会社集合 (wl=Wikidata由来の実乗り入れ路線→会社。JR各社は'JR'に丸めて通算扱い)
+// 注意: st.l は直通列車のラベル路線で汚染されている(みなとみらい駅に西武池袋線等)ので使わない
+const JR_BARE_LINE = /線$/;
+const PRIVATE_HINT = /鉄道|電鉄|電気軌道|軌道|新交通|モノレール|地下鉄|メトロ|高速|ライナー|エクスプレス|市の|空港線$/;
+let _stCompanies = null;
+function stationCompanies(stIdx) {
+  if (!_stCompanies) _stCompanies = new Map();
+  let cs = _stCompanies.get(stIdx);
+  if (cs !== undefined) return cs;
+  const st = D.stations[stIdx];
+  cs = new Set();
+  for (const ln of (st.wl || [])) {
+    let c = lineCompany(ln);
+    if (!c) {
+      // Wikidataの素の路線名(山手線・東海道本線等)はほぼJR
+      if (/^(ＪＲ|JR)/.test(ln) || (JR_BARE_LINE.test(ln) && !PRIVATE_HINT.test(ln))) c = 'JR';
+      else continue;
+    } else if (c.startsWith('JR') || /^(ＪＲ|JR)/.test(ln)) {
+      c = 'JR';
+    }
+    cs.add(c);
+  }
+  _stCompanies.set(stIdx, cs);
+  return cs;
+}
+
+// 直通列車レグを会社境界で分割 (浅草線⇄京急/京成、副都心線⇄東横線等)。
+// 区間(i-1,i)の会社 = 両駅の所属会社の積集合。複数候補は直前区間との連続性優先、
+// それも無ければ「この先で最も長く続く会社」(先読み)
+function lookaheadPick(cands, stops, i) {
+  let best = cands[0], bestRun = -1;
+  for (const c of cands) {
+    let run = 0;
+    for (let j = i; j < stops.length; j++) {
+      if (stationCompanies(stops[j].st).has(c)) run++;
+      else break;
+    }
+    if (run > bestRun) { bestRun = run; best = c; }
+  }
+  return best;
+}
+
+function legParts(leg) {
+  const legC0 = lineCompany(leg.line);
+  const legIsJR = /^(ＪＲ|JR)/.test(leg.line) || legC0.startsWith('JR');
+  const legC = legIsJR ? 'JR' : legC0;
+  const parts = [];
+  let cur = null;
+  let prevGeo = null; // 直前の座標既知駅 (欠損ブリッジ)
+  for (let i = 0; i < leg.stops.length; i++) {
+    const stI = leg.stops[i].st, st = D.stations[stI];
+    if (i > 0) {
+      const a = stationCompanies(leg.stops[i - 1].st);
+      const b = stationCompanies(stI);
+      const cands = [...a].filter(x => b.has(x));
+      let c;
+      if (!cands.length) c = cur ? cur.company : legC; // 情報欠落は現区間を継続
+      else if (cands.length === 1) c = cands[0];
+      else if (cur && cands.indexOf(cur.company) >= 0) c = cur.company;
+      else c = lookaheadPick(cands, leg.stops, i);
+      let km = 0;
+      if (st.la != null && prevGeo) {
+        km = haversineKm(prevGeo.la, prevGeo.lo, st.la, st.lo) * RAIL_KM_FACTOR;
+      }
+      if (!cur || cur.company !== c) {
+        cur = { company: c, dist: 0, stops: [leg.stops[i - 1]] };
+        parts.push(cur);
+      }
+      cur.dist += km;
+      cur.stops.push(leg.stops[i]);
+    }
+    if (st.la != null) prevGeo = st;
+  }
+  if (!parts.length) parts.push({ company: legC, dist: 0, stops: leg.stops.slice() });
+  return parts;
+}
+
+// 通算グループ: グループ内は会社が変わっても距離を通算して1枚のテーブルで引く。
+// JR6社(実制度も通算ベース)、京成⇄スカイアクセス(SA運賃は京成の通し体系で、
+// SAテーブル自体を上野/日暮里発の全行程実額でフィットしてあるため)
+function fareGroup(c) {
+  if (c === 'JR') return 'JR';
+  if (c === '京成' || c === '京成スカイアクセス') return '京成G';
+  return c;
+}
+
 function journeyFare(journey) {
-  // 会社ごとのセグメントに分割。JR同士は会社を跨いでも通算(実制度に近い)し、
-  // 全停車駅の重心で代表会社のテーブルを引く
+  // レグ→会社分割パーツ→隣接同グループをマージして運賃合算
   const segs = [];
   for (const leg of journey.legs) {
     if (leg.kind !== 'ride') continue;
-    let c = lineCompany(leg.line);
-    const isJR = /^(ＪＲ|JR)/.test(leg.line) || c.startsWith('JR');
-    if (isJR) c = jrCompanyByGeo(leg.stops);
-    const km = legKm(leg);
-    const last = segs[segs.length - 1];
-    if (last && (last.company === c || (last.jr && isJR))) {
-      last.dist += km;
-      last.stops = last.stops.concat(leg.stops);
-      if (last.company !== c) last.mixed = true;
-    } else {
-      segs.push({ company: c, dist: km, jr: isJR, stops: leg.stops.slice(), mixed: false });
+    for (const p of legParts(leg)) {
+      const isJR = p.company === 'JR';
+      const last = segs[segs.length - 1];
+      if (last && fareGroup(last.company) === fareGroup(p.company)) {
+        last.dist += p.dist;
+        last.stops = last.stops.concat(p.stops);
+        // 京成グループはSA区間を含むならSAテーブル(空港加算込み)を採用
+        if (p.company === '京成スカイアクセス') last.company = '京成スカイアクセス';
+      } else {
+        segs.push({ company: p.company, dist: p.dist, jr: isJR, stops: p.stops.slice() });
+      }
     }
   }
   let total = 0;
   const breakdown = [];
   for (const s of segs) {
     if (s.dist <= 0) continue;
-    if (s.jr && s.mixed) s.company = jrCompanyByGeo(s.stops); // 跨いだら通算重心で再判定
+    if (s.jr) s.company = jrCompanyByGeo(s.stops); // 重心で地域会社を確定
     const fare = lookupFare(s.company, s.dist);
     total += fare; breakdown.push({ company: s.company, dist: s.dist, fare });
   }
-  for (const s of journeySurcharge(journey)) {
+  const fc = segs.length ? segs[0].company : '';
+  const lc = segs.length ? segs[segs.length - 1].company : '';
+  for (const s of journeySurcharge(journey, fc, lc)) {
     total += s.fare; breakdown.push(s);
   }
   return { total, breakdown };
