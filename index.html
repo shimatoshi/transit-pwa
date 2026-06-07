@@ -422,7 +422,7 @@ body {
 
 <div class="status-bar" id="status">データ読み込み中...</div>
 
-<script src="router_v3.js?v=1"></script>
+<script src="router_v3.js?v=2"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -456,9 +456,9 @@ async function fetchBin(url) {
 (async () => {
   try {
     const [graphData, meta, fares, bin] = await Promise.all([
-      fetch('graph_v2.json?v=1').then(r => r.json()),
+      fetch('graph_v2.json?v=2').then(r => r.json()),
       fetch('trains_v3_meta.json?v=2').then(r => r.json()),
-      fetch('fares.json?v=3').then(r => r.json()),
+      fetch('fares.json?v=4').then(r => r.json()),
       fetchBin('trains_v3.bin.gz?v=2'),
     ]);
     graph = graphData;

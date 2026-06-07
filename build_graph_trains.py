@@ -115,13 +115,34 @@ def main():
             s = s.replace(a, b)
         return s
 
+    # 表記揺れ正規化: ekitan=ケ/全角数字/(社名)後置, Wikidata=ヶ/半角数字/社名前置
+    # (fix_coords.py と同じロジック。これが無いと新鎌ケ谷・羽田空港各駅等256駅が座標欠損)
+    import unicodedata
+    GEO_COMPANY_PREFIXES = (
+        '京浜急行電鉄', '東京モノレール', '東京地下鉄', '東京メトロ', '東武鉄道',
+        '西武鉄道', '京成電鉄', '京王電鉄', '小田急電鉄', '東急電鉄', '相模鉄道',
+    )
+
+    def norm_name(name):
+        s = re.sub(r'[（(].*?[)）]$', '', name)
+        s = unicodedata.normalize('NFKC', s)
+        return s.replace('ヶ', 'ケ').replace('ヵ', 'カ')
+
     name2cands = defaultdict(list)  # name -> [(la, lo, p, e, canon_lines)]
+    norm2cands = defaultdict(list)  # normalized name -> same
     try:
         with open(OLD_GRAPH) as f:
             old = json.load(f)
         for s in old['stations']:
             cl = {canon(l) for l in s.get('l', [])}
-            name2cands[s['n']].append((s.get('la'), s.get('lo'), s.get('p', ''), s.get('e', ''), cl))
+            rec = (s.get('la'), s.get('lo'), s.get('p', ''), s.get('e', ''), cl)
+            name2cands[s['n']].append(rec)
+            norms = {norm_name(s['n'])}
+            for pre in GEO_COMPANY_PREFIXES:
+                if s['n'].startswith(pre):
+                    norms.add(norm_name(s['n'][len(pre):]))
+            for n in norms:
+                norm2cands[n].append(rec)
         print(f"Old graph names for geo enrichment: {len(name2cands)}")
     except FileNotFoundError:
         print("WARN: old graph.json not found, stations will lack coords")
@@ -132,6 +153,15 @@ def main():
             # ekitan disambiguation suffixes: 札幌(ＪＲ), 浅草(ＴＸ) etc.
             base = re.sub(r'[（(].*?[)）]$', '', name)
             cands = name2cands.get(base)
+        if not cands:
+            cands = norm2cands.get(norm_name(name))
+        if cands and len(cands) > 1:
+            # サフィックスが都道府県ヒントの場合: 河原町(宮城) 等
+            m = re.search(r'[（(](.+?)[)）]$', name)
+            if m:
+                by_pref = [c for c in cands if m.group(1) in (c[2] or '')]
+                if by_pref:
+                    cands = by_pref
         if not cands:
             return (None, None, '', '')
         if len(cands) == 1:

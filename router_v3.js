@@ -299,12 +299,13 @@ function haversineKm(la1, lo1, la2, lo2) {
 }
 
 function legKm(leg) {
-  let km = 0;
-  for (let i = 1; i < leg.stops.length; i++) {
-    const a = D.stations[leg.stops[i - 1].st], b = D.stations[leg.stops[i].st];
-    if (a.la != null && b.la != null) {
-      km += haversineKm(a.la, a.lo, b.la, b.lo) * RAIL_KM_FACTOR;
-    }
+  // 座標欠損駅はスキップし、直前の座標既知駅からブリッジして距離を落とさない
+  let km = 0, prev = null;
+  for (let i = 0; i < leg.stops.length; i++) {
+    const s = D.stations[leg.stops[i].st];
+    if (s.la == null) continue;
+    if (prev) km += haversineKm(prev.la, prev.lo, s.la, s.lo) * RAIL_KM_FACTOR;
+    prev = s;
   }
   return km;
 }
@@ -365,6 +366,26 @@ function lookupFare(company, distKm) {
   return cd.ic_fare[cd.ic_fare.length - 1][1];
 }
 
+// 加算運賃(空港アクセス等): 乗車起点/降車終点が対象駅かつ該当会社の利用なら加算
+function journeySurcharge(journey) {
+  if (!D.fares || !D.fares.surcharges) return [];
+  const rides = journey.legs.filter(l => l.kind === 'ride');
+  if (!rides.length) return [];
+  const first = rides[0], last = rides[rides.length - 1];
+  const oName = D.stations[first.stops[0].st].n;
+  const dName = D.stations[last.stops[last.stops.length - 1].st].n;
+  const out = [];
+  for (const rule of D.fares.surcharges) {
+    // company指定があれば該当会社の乗車時のみ(成田空港はJR利用なら加算なし)。
+    // 駅名で一意な場合(羽田(京急)等)はcompany省略で直通列車のラベル揺れに耐える
+    const hit =
+      (rule.stations.includes(oName) && (!rule.company || lineCompany(first.line) === rule.company)) ||
+      (rule.stations.includes(dName) && (!rule.company || lineCompany(last.line) === rule.company));
+    if (hit) out.push({ company: rule.label || rule.company + '(加算)', dist: 0, fare: rule.yen });
+  }
+  return out;
+}
+
 function journeyFare(journey) {
   let total = 0, company = null, dist = 0;
   const breakdown = [];
@@ -382,6 +403,9 @@ function journeyFare(journey) {
   if (company !== null && dist > 0) {
     const fare = lookupFare(company, dist);
     total += fare; breakdown.push({ company, dist, fare });
+  }
+  for (const s of journeySurcharge(journey)) {
+    total += s.fare; breakdown.push(s);
   }
   return { total, breakdown };
 }
