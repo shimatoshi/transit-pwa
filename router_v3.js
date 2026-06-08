@@ -510,12 +510,28 @@ function legParts(leg) {
     if (i > 0) {
       const a = stationCompanies(leg.stops[i - 1].st);
       const b = stationCompanies(stI);
+      // 区間(i-1,i)の運賃会社を決める。wlは直通乗り入れ(中目黒にMM線等)や欠落
+      // (なんばに無し)で汚れるため、列車ラベルlegCと駅wlを突き合わせて頑健に判定:
+      //  1) 両駅共通会社にlegCがある → legC(その社の自社線区間で確実)
+      //  2) 共通会社が別にある → それ(直通でラベルが別社になってる区間。例:渋谷→中目黒)
+      //  3) 共通ゼロ: ラベル社が片方にあればlegC(例:浜松町JR→モノ)、
+      //     両駅とも別社判明なら直通境界(継続)、片方wl欠落なら実在側の単一社(例:梅田→なんば)
       const cands = [...a].filter(x => b.has(x));
       let c;
-      if (!cands.length) c = cur ? cur.company : legC; // 情報欠落は現区間を継続
-      else if (cands.length === 1) c = cands[0];
-      else if (cur && cands.indexOf(cur.company) >= 0) c = cur.company;
-      else c = lookaheadPick(cands, leg.stops, i);
+      if (cands.indexOf(legC) >= 0) {
+        c = legC;
+      } else if (cands.length) {
+        if (cands.length === 1) c = cands[0];
+        else if (cur && cands.indexOf(cur.company) >= 0) c = cur.company;
+        else c = lookaheadPick(cands, leg.stops, i);
+      } else if (a.has(legC) || b.has(legC)) {
+        c = legC;
+      } else if (a.size && b.size) {
+        c = cur ? cur.company : legC; // 両駅とも別社=直通境界
+      } else {
+        const k = a.size ? a : b;     // 片方wl欠落 → 実在側の単一社
+        c = k.size === 1 ? [...k][0] : legC;
+      }
       let km = 0;
       if (st.la != null && prevGeo) {
         km = haversineKm(prevGeo.la, prevGeo.lo, st.la, st.lo) * RAIL_KM_FACTOR;
@@ -635,11 +651,24 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   const ban = new Set([first.legs.find(l => l.kind === 'ride').trip]);
   add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banTrips: ban })));
 
-  // 到着時刻→出発遅い→乗換少ない
+  // ランキング: 有料特急/新幹線には時間ペナルティを課し、特急料金を払う価値が
+  // ある(大幅に速い)時だけ上位に来るようにする。これで三ノ宮→姫路の「新快速4分差
+  // なのに新幹線」や大阪→京都の新幹線混入を抑える。
+  const PAID_PENALTY = 18;   // 有料特急/新幹線=実質+18分扱い(料金に見合う閾値)
+  const TRANSFER_PEN = 4;    // 乗換1回=+4分扱い
+  function usesPaidJ(j) {
+    return j.legs.some(l => l.kind === 'ride' &&
+      (D.tripPaid[l.trip] || D.tripShink[l.trip]));
+  }
+  function effArr(j) {
+    return j.arr + (usesPaidJ(j) ? PAID_PENALTY : 0) + j.transfers * TRANSFER_PEN;
+  }
   out.sort((a, b) => {
-    if (Math.abs(a.arr - b.arr) > 5) return a.arr - b.arr;
-    if (Math.abs(b.dep - a.dep) > 5) return b.dep - a.dep;
-    return a.transfers - b.transfers;
+    const ea = effArr(a), eb = effArr(b);
+    if (Math.abs(ea - eb) > 5) return ea - eb;          // 実効到着が早い方
+    if (a.transfers !== b.transfers) return a.transfers - b.transfers; // 乗換少
+    if (Math.abs(b.dep - a.dep) > 5) return b.dep - a.dep; // 遅く出て待たない
+    return a.arr - b.arr;
   });
   return out;
 }
