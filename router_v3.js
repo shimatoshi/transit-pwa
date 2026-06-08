@@ -399,6 +399,30 @@ function jrCompanyByGeo(stops) {
   return (D.fares && D.fares.companies[best]) ? best : 'JR東日本';
 }
 
+// 京阪神電車特定区間の座標ボックス(2025-04拡大後を内包する近似)。
+// 網干(東経134.5)〜野洲/草津(東経136.05)、和歌山(北緯34.2)〜京都/草津(北緯35.1)
+function inKeihanshin(stops) {
+  let la = 0, lo = 0, n = 0;
+  for (const s of stops) {
+    const st = D.stations[s.st];
+    if (st.la != null) { la += st.la; lo += st.lo; n++; }
+  }
+  if (!n) return false;
+  la /= n; lo /= n;
+  return la >= 34.2 && la <= 35.1 && lo >= 134.5 && lo <= 136.05;
+}
+
+// JR特定運賃(私鉄競合区間): セグメント端点の駅名ペアで照合(両順)
+function jrSpecialFare(stops) {
+  if (!D.fares || !D.fares.jr_special || stops.length < 2) return null;
+  const a = D.stations[stops[0].st].n, b = D.stations[stops[stops.length - 1].st].n;
+  const sp = D.fares.jr_special;
+  const v = sp[a + '|' + b];
+  if (v != null) return v;
+  const v2 = sp[b + '|' + a];
+  return v2 != null ? v2 : null;
+}
+
 function lookupFare(company, distKm) {
   if (!D.fares) return Math.round(distKm * 25);
   const cd = D.fares.companies[company];
@@ -540,7 +564,18 @@ function journeyFare(journey) {
   const breakdown = [];
   for (const s of segs) {
     if (s.dist <= 0) continue;
-    if (s.jr) s.company = jrCompanyByGeo(s.stops); // 重心で地域会社を確定
+    if (s.jr) {
+      const co = jrCompanyByGeo(s.stops); // 重心で地域会社を確定
+      // 1) 特定運賃(私鉄競合区間)が端点ペアにあれば最優先
+      const sp = jrSpecialFare(s.stops);
+      if (sp != null) {
+        s.company = co;
+        total += sp; breakdown.push({ company: co + '(特定)', dist: s.dist, fare: sp });
+        continue;
+      }
+      // 2) JR西の京阪神エリアは電車特定区間テーブル
+      s.company = (co === 'JR西日本' && inKeihanshin(s.stops)) ? 'JR西日本電特' : co;
+    }
     const fare = lookupFare(s.company, s.dist);
     total += fare; breakdown.push({ company: s.company, dist: s.dist, fare });
   }
