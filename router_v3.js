@@ -18,8 +18,46 @@ const MIN_TRANSFER = 4;   // 同一駅乗換の標準バッファ(分)
 const RAIL_KM_FACTOR = 1.06;
 const INF = 0x3fffffff;
 
-// 有料優等判定 (router.js と同一ロジック)
-const FREE_TYPE_RE = /^(普通|各駅停車|各停|ワンマン|ＢＲＴ|BRT|バス|快速|新快速|区間快速|特別快速|通勤快速|快速急行|通勤急行|急行|区間急行|準急|区間準急|特快|通勤特快|中央特快|青梅特快|快特|エアポート|アクセス特急|直通特急|通勤特急|快速特急|特急)/;
+// 有料優等判定。日本の私鉄「特急」は大半が無料(京急/京成/南海/阪神/山陽/東急/名鉄等)、
+// JR/近鉄の特急と固有名の有料列車のみ特急券が要る。誤って無料快速(大和路快速/関空快速等)を
+// 課金しないよう、有料は「allowlist(固有名) + JR/近鉄の特急」で判定する。
+// 特急を含むが無料の優等(準特急/通勤特急/快速特急/直通特急/アクセス特急/区間特急/川越特急)。
+const FREE_EXPRESS_RE = /(準特急|通勤特急|快速特急|直通特急|アクセス特急|区間特急|川越特急)/;
+// 固有名の有料特急・有料ライナー(allowlist)。ここに無い名前は無料扱い(取りこぼしは過小=安全側)。
+const PAID_NAME_RE = new RegExp([
+  // JR在来線特急
+  'あずさ','かいじ','富士回遊','はちおうじ','おうめ','ひたち','ときわ','踊り子','湘南',
+  'サフィール','成田エクスプレス','しおさい','わかしお','さざなみ','しなの','ひだ','南紀',
+  '伊那路','ふじかわ','サンダーバード','しらさぎ','びわこエクスプレス','らくラク','はるか',
+  'くろしお','こうのとり','きのさき','まいづる','はしだて','スーパーはくと','はまかぜ',
+  'スーパーいなば','やくも','スーパーおき','スーパーまつかぜ','北斗','おおぞら','とかち',
+  'オホーツク','大雪','宗谷','サロベツ','カムイ','ライラック','すずらん','ソニック','にちりん',
+  'ひゅうが','きりしま','かもめ','みどり','ハウステンボス','かささぎ','きらめき','ゆふ',
+  '九州横断特急','かわせみ','やませみ','海幸山幸','指宿のたまて箱','南風','しまんと','あしずり',
+  'うずしお','剣山','むろと','しおかぜ','いしづち','宇和海','いなほ','つがる','草津','四万',
+  'あかぎ','日光','きぬがわ','スペーシア',
+  // 私鉄有料特急・有料ライナー
+  'スカイライナー','イブニングライナー','モーニングライナー','ロマンスカー','はこね','さがみ',
+  'えのしま','ホームウェイ','モーニングウェイ','メトロはこね','ふじさん','フジサン特急',
+  '富士山ビュー','ミュースカイ','りょうもう','リバティ','けごん','きぬ','ちちぶ','むさし',
+  '小江戸','京王ライナー','拝島ライナー','泉北ライナー','ラピート','りんかん','こうや','天空',
+  'スノーモンキー','ゆけむり','しまかぜ','ひのとり','あをによし',
+].join('|'));
+
+function isJRLine(line) { return /^(ＪＲ|JR)/.test(line); }
+
+// 列車が有料か。'shinkansen' | 'paid'(在来線有料特急/ライナー) | null(無料)
+function expressKind(line, type) {
+  if (!type) return null;
+  if (line.includes('新幹線')) return 'shinkansen';
+  if (FREE_EXPRESS_RE.test(type)) return null;       // 準特急/通勤特急/直通特急等は無料
+  if (PAID_NAME_RE.test(type)) return 'paid';         // 固有名の有料列車
+  if (/特急/.test(type)) {                            // 素の「特急」はJR/近鉄のみ有料
+    if (isJRLine(line)) return 'paid';
+    if (lineCompany(line) === '近鉄') return 'paid';
+  }
+  return null;
+}
 
 const D = {
   stations: null,   // graph_v2 stations
@@ -79,8 +117,9 @@ function loadBinary(arrayBuffer, meta, stations, fares) {
   for (let t = 0; t < ntrips; t++) {
     const line = D.lines[D.tripLine[t]] || '';
     const type = D.types[D.tripType[t]] || '';
-    if (line.includes('新幹線')) shink[t] = 1;
-    else if (type && !FREE_TYPE_RE.test(type)) paid[t] = 1;
+    const k = expressKind(line, type);
+    if (k === 'shinkansen') shink[t] = 1;
+    else if (k === 'paid') paid[t] = 1;
   }
   D.tripPaid = paid; D.tripShink = shink;
 
@@ -558,6 +597,114 @@ function fareGroup(c) {
   return c;
 }
 
+// --- 特急料金 (乗車券への加算: 新幹線/在来線有料特急) ---
+function bandLookup(table, km) {
+  const k = Math.ceil(km);
+  for (const [mx, yen] of table) if (k <= mx) return yen;
+  return table[table.length - 1][1];
+}
+
+function shinkansenGroup(line) {
+  const ex = D.fares && D.fares.express;
+  if (!ex) return null;
+  for (const [sub, key] of ex.shinkansen_groups) if (line.includes(sub)) return key;
+  return null;
+}
+
+// legの新幹線系統を決める。ミニ新幹線は種別で(こまち=秋田/つばさ=山形)、
+// 山陽内(新大阪以西)は東海道より安い独自体系なので営業キロ位置で振り分け。
+function shinkansenGroupFor(leg) {
+  const ex = D.fares && D.fares.express;
+  const t = leg.type || '';
+  if (t.includes('こまち')) return 'akita';
+  if (t.includes('つばさ')) return 'yamagata';
+  let g = shinkansenGroup(leg.line) || 'tokaido';
+  if (g === 'tokaido' && ex && ex.eigyo_km) {
+    const strip = n => n.replace(/[（(].*?[）)]/g, '');
+    const a = ex.eigyo_km[strip(D.stations[leg.from].n)];
+    const b = ex.eigyo_km[strip(D.stations[leg.to].n)];
+    if (a != null && b != null && Math.min(a, b) >= 550) g = 'sanyo'; // 新大阪以西
+  }
+  return g;
+}
+
+// 新幹線legの営業キロ: 始終点駅を営業キロ表で引いて差分。直線距離(haversine)は
+// 路線の曲がり・停車駅疎で誤差が大きいため、特急料金は実営業キロで計算する。
+function shinkansenKm(leg) {
+  const ex = D.fares && D.fares.express;
+  const ekm = ex && ex.eigyo_km;
+  if (!ekm) return legKm(leg);
+  const strip = n => n.replace(/[（(].*?[）)]/g, '');
+  const a = ekm[strip(D.stations[leg.from].n)];
+  const b = ekm[strip(D.stations[leg.to].n)];
+  if (a != null && b != null) return Math.abs(b - a);
+  return legKm(leg);
+}
+
+// 在来線/私鉄有料列車の料金: 固有名定額→会社別table。不明な私鉄特急は0(安全側)
+function convExpressFare(type, line, km) {
+  const ex = D.fares.express;
+  for (const [name, yen] of Object.entries(ex.conv_by_name || {})) {
+    if (type.includes(name)) return yen;
+  }
+  const c = lineCompany(line);
+  const key = isJRLine(line) ? 'JR' : (ex.conventional[c] ? c : null);
+  if (!key) return 0;
+  return bandLookup(ex.conventional[key], km);
+}
+
+// journey全体の特急料金内訳。連続する同系統の新幹線legは通算1枚にまとめ、
+// 新幹線に隣接するJR在来線特急は乗継割引(半額)。
+function expressFares(journey) {
+  const ex = D.fares && D.fares.express;
+  if (!ex) return [];
+  const rides = journey.legs.filter(l => l.kind === 'ride');
+  // 各legの課金単位を構築
+  const units = [];
+  rides.forEach((leg, j) => {
+    const k = expressKind(leg.line, leg.type);
+    if (!k) return;
+    const km = k === 'shinkansen' ? shinkansenKm(leg) : legKm(leg);
+    if (k === 'shinkansen') {
+      const group = shinkansenGroupFor(leg);
+      const last = units[units.length - 1];
+      if (last && last.kind === 'shinkansen' && last.group === group && last.j === j - 1) {
+        last.km += km; last.j = j;                 // 同系統の通し乗車は通算
+        if (premiumYen(ex, last.group, leg.type, last.km) > premiumYen(ex, last.group, last.type, last.km)) last.type = leg.type;
+      } else {
+        units.push({ kind: 'shinkansen', group, km, type: leg.type, j });
+      }
+    } else {
+      units.push({ kind: 'paid', type: leg.type, line: leg.line, km, j });
+    }
+  });
+  const out = [];
+  units.forEach((u, k) => {
+    if (u.kind === 'shinkansen') {
+      const base = bandLookup(ex.groups[u.group], u.km);
+      const prem = premiumYen(ex, u.group, u.type, u.km);
+      out.push({ company: (u.type || '新幹線') + '特急料金', dist: 0, fare: base + prem });
+    } else {
+      let fare = convExpressFare(u.type, u.line, u.km);
+      if (!fare) return;
+      // 乗継割引: 新幹線と隣接するJR在来線特急は半額
+      const adjShink = (units[k - 1] && units[k - 1].kind === 'shinkansen') ||
+                       (units[k + 1] && units[k + 1].kind === 'shinkansen');
+      if (adjShink && isJRLine(u.line)) fare = Math.floor(fare / 2 / 10) * 10;
+      out.push({ company: (u.type || '特急') + '料金', dist: 0, fare });
+    }
+  });
+  return out;
+}
+
+function premiumYen(ex, group, type, km) {
+  if (!type || !ex.premium) return 0;
+  for (const [name, table] of Object.entries(ex.premium)) {
+    if (type.includes(name)) return bandLookup(table, km);
+  }
+  return 0;
+}
+
 function journeyFare(journey) {
   // レグ→会社分割パーツ→隣接同グループをマージして運賃合算
   const segs = [];
@@ -599,6 +746,22 @@ function journeyFare(journey) {
   const lc = segs.length ? segs[segs.length - 1].company : '';
   for (const s of journeySurcharge(journey, fc, lc)) {
     total += s.fare; breakdown.push(s);
+  }
+  // 乗継割引(運賃側): 隣接セグが対象会社ペアなら控除/加算 (メトロ⇄都営-70等)
+  const td = D.fares && D.fares.transfer_discounts;
+  if (td) {
+    const usedCos = new Set(segs.map(s => s.company));
+    for (const rule of td) {
+      // 経路が両社を含めば1回だけ適用(乗継割引は通しで1回)
+      if (rule.companies.every(c => usedCos.has(c))) {
+        total += rule.yen;
+        breakdown.push({ company: rule.label, dist: 0, fare: rule.yen });
+      }
+    }
+  }
+  // 特急料金(乗車券への加算)
+  for (const e of expressFares(journey)) {
+    total += e.fare; breakdown.push(e);
   }
   return { total, breakdown };
 }

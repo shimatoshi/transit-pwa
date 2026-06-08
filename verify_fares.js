@@ -70,7 +70,8 @@ for (const [f, t, co, real, realKm] of ANCHORS) {
   if (s < 0 || g < 0) { rows.push([f + '→' + t, ' 駅なし']); miss++; continue; }
   let found = null;
   for (const at of [540, 600, 660]) {
-    const js = R.findJourneys(s, g, at, {});
+    // アンカーは乗車券のみの実額なので、有料特急/新幹線を除外して引く
+    const js = R.findJourneys(s, g, at, { express: false, shinkansen: false });
     for (const j of js) {
       const fr = R.journeyFare(j);
       const main = fr.breakdown.filter(b => b.dist > 0).sort((a, b) => b.dist - a.dist)[0];

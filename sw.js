@@ -1,4 +1,4 @@
-const CACHE_NAME = 'transit-v23';
+const CACHE_NAME = 'transit-v24';
 const ASSETS = [
   './',
   './index.html',

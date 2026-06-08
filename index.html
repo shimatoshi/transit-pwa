@@ -458,7 +458,7 @@ async function fetchBin(url) {
     const [graphData, meta, fares, bin] = await Promise.all([
       fetch('graph_v2.json?v=3').then(r => r.json()),
       fetch('trains_v3_meta.json?v=2').then(r => r.json()),
-      fetch('fares.json?v=8').then(r => r.json()),
+      fetch('fares.json?v=9').then(r => r.json()),
       fetchBin('trains_v3.bin.gz?v=2'),
     ]);
     graph = graphData;
@@ -816,7 +816,13 @@ function renderOneRoute(j, index) {
       <div style="font-size:20px;font-weight:700;color:var(--blue)">${depStr} → ${arrStr}</div>
       <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${j.transfers > 0 ? j.transfers + '回乗換' : '直通'} / ${km.toFixed(1)}km</div>
     </div>
-    <div style="font-size:18px;font-weight:700;color:var(--text)">¥${fare.total.toLocaleString()}</div>
+    <div style="text-align:right">
+      <div style="font-size:18px;font-weight:700;color:var(--text)">¥${fare.total.toLocaleString()}</div>
+      ${(() => {
+        const ex = fare.breakdown.filter(b => /料金$/.test(b.company)).reduce((a, b) => a + b.fare, 0);
+        return ex > 0 ? `<div style="font-size:11px;color:var(--muted)">うち特急料金 ¥${ex.toLocaleString()}</div>` : '';
+      })()}
+    </div>
   </div>`;
 
   // Line summary bar
