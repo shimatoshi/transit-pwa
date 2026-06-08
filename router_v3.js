@@ -194,6 +194,7 @@ function query(srcIdx, dstIdx, depMin, opts) {
   const useExpress = opts.express !== false;
   const useShink = opts.shinkansen !== false;
   const banTrips = opts.banTrips || null; // Set of trip ids
+  const banLines = opts.banLines || null; // Set of line names (経路多様化用)
 
   const ns = D.stations.length;
   const arr = new Int32Array(ns).fill(INF);
@@ -214,6 +215,7 @@ function query(srcIdx, dstIdx, depMin, opts) {
     if (dT > arr[dstIdx]) break; // これ以降は改善不可
     const trip = D.cTrip[c];
     if (banTrips && banTrips.has(trip)) continue;
+    if (banLines && banLines.has(D.lines[D.tripLine[trip]])) continue;
     if (!useShink && D.tripShink[trip]) continue;
     if (!useExpress && D.tripPaid[trip]) continue;
 
@@ -814,6 +816,15 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   const ban = new Set([first.legs.find(l => l.kind === 'ride').trip]);
   add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banTrips: ban })));
 
+  // 経路多様化: これまでの候補が使った路線を全て禁止して再探索し、別系統の直通
+  // (例: 柏→大宮の東武野田線)を発掘する。最速優先CSAだと速い迂回に隠れて直通が
+  // 出ないため。junkはランキング+slice(下記)で落ちる。
+  const banLines = new Set();
+  for (let iter = 0; iter < 2; iter++) {
+    for (const j of out) for (const l of j.legs) if (l.kind === 'ride') banLines.add(l.line);
+    if (!add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banLines: new Set(banLines) })))) break;
+  }
+
   // ランキング: 有料特急/新幹線には時間ペナルティを課し、特急料金を払う価値が
   // ある(大幅に速い)時だけ上位に来るようにする。これで三ノ宮→姫路の「新快速4分差
   // なのに新幹線」や大阪→京都の新幹線混入を抑える。
@@ -833,7 +844,7 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
     if (Math.abs(b.dep - a.dep) > 5) return b.dep - a.dep; // 遅く出て待たない
     return a.arr - b.arr;
   });
-  return out;
+  return out.slice(0, 6);   // 多様化で増えた候補のうち上位のみ(junk除去)
 }
 
 const RouterV3 = {
