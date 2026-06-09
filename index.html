@@ -458,7 +458,7 @@ async function fetchBin(url) {
     const [graphData, meta, fares, bin] = await Promise.all([
       fetch('graph_v2.json?v=3').then(r => r.json()),
       fetch('trains_v3_meta.json?v=2').then(r => r.json()),
-      fetch('fares.json?v=9').then(r => r.json()),
+      fetch('fares.json?v=10').then(r => r.json()),
       fetchBin('trains_v3.bin.gz?v=2'),
     ]);
     graph = graphData;

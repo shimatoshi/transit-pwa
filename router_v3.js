@@ -543,6 +543,11 @@ function legParts(leg) {
   const legC0 = lineCompany(leg.line);
   const legIsJR = /^(ＪＲ|JR)/.test(leg.line) || legC0.startsWith('JR');
   const legC = legIsJR ? 'JR' : legC0;
+  // 新幹線legは単一JR(会社跨ぎも運賃は距離通算)。運賃距離も営業キロΔで正確に。
+  // 直線距離だと東京-新大阪が440km(営業552)になり運賃を1000円超過小評価する。
+  if (leg.line && leg.line.includes('新幹線')) {
+    return [{ company: legC, dist: shinkansenKm(leg), stops: leg.stops.slice() }];
+  }
   const parts = [];
   let cur = null;
   let prevGeo = null; // 直前の座標既知駅 (欠損ブリッジ)
@@ -618,15 +623,16 @@ function shinkansenGroup(line) {
 function shinkansenGroupFor(leg) {
   const ex = D.fares && D.fares.express;
   const t = leg.type || '';
-  if (t.includes('こまち')) return 'akita';
-  if (t.includes('つばさ')) return 'yamagata';
+  const strip = n => n.replace(/[（(].*?[）)]/g, '');
+  const ekm = ex && ex.eigyo_km;
+  const a = ekm ? ekm[strip(D.stations[leg.from].n)] : null;
+  const b = ekm ? ekm[strip(D.stations[leg.to].n)] : null;
+  // ミニ新幹線: 秋田(盛岡535以遠)/山形(福島273以遠)区間に入る時のみ通し体系。
+  // 東北区間のみ(東京→仙台のこまち等)は東北base。
+  if (t.includes('こまち') && a != null && b != null && Math.max(a, b) > 535) return 'akita';
+  if (t.includes('つばさ') && a != null && b != null && Math.max(a, b) > 273) return 'yamagata';
   let g = shinkansenGroup(leg.line) || 'tokaido';
-  if (g === 'tokaido' && ex && ex.eigyo_km) {
-    const strip = n => n.replace(/[（(].*?[）)]/g, '');
-    const a = ex.eigyo_km[strip(D.stations[leg.from].n)];
-    const b = ex.eigyo_km[strip(D.stations[leg.to].n)];
-    if (a != null && b != null && Math.min(a, b) >= 550) g = 'sanyo'; // 新大阪以西
-  }
+  if (g === 'tokaido' && a != null && b != null && Math.min(a, b) >= 550) g = 'sanyo'; // 新大阪以西
   return g;
 }
 
