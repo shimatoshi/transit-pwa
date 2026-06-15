@@ -987,16 +987,48 @@ function shiftTrain(index, dir) {
   if (det) det.classList.remove('collapsed');   // 差し替え後は展開表示
 }
 
-function renderMultipleResults(routes) {
-  allFoundRoutes = routes;
-  const showCount = Math.min(3, routes.length);
-  let html = '';
+let currentSort = 'fast';   // fast=早い / cheap=安い / transfer=乗換少
+let showAllRoutes = false;
+
+function fareOf(j) {         // 運賃をキャッシュ(ソート用)
+  if (j._fare == null) j._fare = RouterV3.journeyFare(j).total;
+  return j._fare;
+}
+const SORTERS = {
+  fast: (a, b) => (a.arr - b.arr) || (a.transfers - b.transfers) || (b.dep - a.dep),
+  cheap: (a, b) => (fareOf(a) - fareOf(b)) || (a.arr - b.arr) || (a.transfers - b.transfers),
+  transfer: (a, b) => (a.transfers - b.transfers) || (a.arr - b.arr) || (fareOf(a) - fareOf(b)),
+};
+const SORT_LABELS = { fast: '早い順', cheap: '安い順', transfer: '乗換少' };
+
+function setSort(key) {
+  if (currentSort === key) return;
+  currentSort = key;
+  renderRoutes();
+}
+
+function sortBarHtml() {
+  return `<div style="display:flex;gap:6px;padding:8px 12px 4px">` +
+    Object.keys(SORT_LABELS).map(k => {
+      const on = currentSort === k;
+      return `<button onclick="setSort('${k}')" style="
+        flex:1;padding:8px;border-radius:8px;font-size:13px;cursor:pointer;
+        border:1px solid ${on ? 'var(--blue)' : 'var(--border)'};
+        background:${on ? 'var(--blue)' : '#fff'};color:${on ? '#fff' : 'var(--text)'};
+        font-weight:${on ? '600' : '400'}">${SORT_LABELS[k]}</button>`;
+    }).join('') + `</div>`;
+}
+
+function renderRoutes() {
+  const routes = allFoundRoutes;
+  if (!routes.length) return;
+  routes.sort(SORTERS[currentSort] || SORTERS.fast);
+  const showCount = showAllRoutes ? routes.length : Math.min(3, routes.length);
+  let html = routes.length > 1 ? sortBarHtml() : '';
   if (routes.length > 1) {
-    html += `<div style="padding:4px 16px 0;font-size:13px;color:var(--muted)">${routes.length}件の経路</div>`;
+    html += `<div style="padding:0 16px 0;font-size:13px;color:var(--muted)">${routes.length}件の経路</div>`;
   }
-  for (let i = 0; i < showCount; i++) {
-    html += renderOneRoute(routes[i], i);
-  }
+  for (let i = 0; i < showCount; i++) html += renderOneRoute(routes[i], i);
   if (routes.length > showCount) {
     html += `<button onclick="showMoreRoutes()" id="show-more-btn" style="
       width:calc(100% - 24px);margin:0 12px 12px;padding:12px;
@@ -1007,12 +1039,15 @@ function renderMultipleResults(routes) {
   document.getElementById('results').innerHTML = html;
 }
 
+function renderMultipleResults(routes) {
+  allFoundRoutes = routes;
+  showAllRoutes = false;
+  renderRoutes();
+}
+
 function showMoreRoutes() {
-  let html = `<div style="padding:4px 16px 0;font-size:13px;color:var(--muted)">${allFoundRoutes.length}件の経路</div>`;
-  for (let i = 0; i < allFoundRoutes.length; i++) {
-    html += renderOneRoute(allFoundRoutes[i], i);
-  }
-  document.getElementById('results').innerHTML = html;
+  showAllRoutes = true;
+  renderRoutes();
 }
 
 function toggleRoute(routeId) {
