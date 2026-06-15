@@ -109,19 +109,16 @@ def leg_exists(leg):
         time.sleep(0.6)
     if deps is None:
         return (None, None)   # 取得失敗
-    # 同駅の発車を抽出し、自作発時刻に最も近いものを記録
+    # レグの発着駅間検索なので方向は限定済み。同駅±2分に発車があれば「実在」とみなす
+    # (路線名はYahooと表記差が大きいため存在判定には用いない)。最寄りを記録。
     same = []
     for (yt, ys, yl) in deps:
         if ys == fs or ys in fs or fs in ys:
             ymin = int(yt[:2]) * 60 + int(yt[3:])
             same.append((abs(ymin - t0), yt, yl))
     same.sort()
-    for dt in (0, 1, -1, 2, -2):
-        cand = hhmm(t0 + dt)
-        for (yt, ys, yl) in deps:
-            if yt == cand and (ys == fs or ys in fs or fs in ys):
-                if not lk or not yl or yl == lk or yl in lk or lk in yl:
-                    return (True, None)
+    if same and same[0][0] <= 2:
+        return (True, None)
     nearest = f'{same[0][1]}{same[0][2]}(±{same[0][0]}分)' if same else 'その駅の発車自体なし'
     return (False, nearest)
 
@@ -163,10 +160,10 @@ def run(routes):
     print('-' * 90)
     print(f'試行{tot}件: レグ実在[{leg_real}/{leg_tot}] 取得失敗{leg_fail}')
     if phantom:
-        print(f'\n幻候補レグ {len(phantom)}件(発着駅間をその発時刻で検索しても該当列車が無い):')
-        for frm, to, hh, l in phantom:
-            print(f'  {frm}→{to} {hh}時: {l["from"]}{hhmm(l["fromT"])}発→{l["to"]}{hhmm(l["toT"])}着 '
-                  f'{l["line"]} {l.get("type","")} {l.get("dest","")}行')
+        print(f'\n要調査レグ {len(phantom)}件(同駅±2分に発車が無く時刻ズレ/幻の疑い):')
+        for frm, to, hh, l, nearest in phantom:
+            print(f'  {frm}→{to} {hh}時: {l["from"]}{hhmm(l["fromT"])}発 '
+                  f'{linekey(l["line"])} {l.get("type","")} {l.get("dest","")}行  最寄実在={nearest}')
 
 
 if __name__ == '__main__':
