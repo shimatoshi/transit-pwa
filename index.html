@@ -711,6 +711,7 @@ function doSearch() {
     shinkansen: document.getElementById('opt-shinkansen').checked,
     day: getDayType(),               // 運転日フィルタ(0平日/1土/2休)
   };
+  lastSearchOpts = opts;             // 前の便/次の便で再利用
 
   // 到着指定: 指定時刻までに着く最遅出発を二分探索
   function latestDeparture(f, t, arrBy) {
@@ -832,7 +833,7 @@ function renderOneRoute(j, index) {
   const rides = j.legs.filter(l => l.kind === 'ride');
 
   const routeId = 'route-' + index;
-  let html = `<div class="route-card">`;
+  let html = `<div class="route-card" id="card-${index}">`;
 
   html += `<div class="route-summary" onclick="toggleRoute('${routeId}')" style="cursor:pointer">
     <div style="flex:1">
@@ -846,6 +847,12 @@ function renderOneRoute(j, index) {
         return ex > 0 ? `<div style="font-size:11px;color:var(--muted)">うち特急料金 ¥${ex.toLocaleString()}</div>` : '';
       })()}
     </div>
+  </div>`;
+
+  // 前の便 / 次の便 (この経路の発車時刻を1本ずらす)
+  html += `<div style="display:flex;gap:8px;padding:2px 16px 8px">
+    <button onclick="event.stopPropagation();shiftTrain(${index},-1)" style="flex:1;padding:7px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--blue);cursor:pointer">← 前の便</button>
+    <button onclick="event.stopPropagation();shiftTrain(${index},1)" style="flex:1;padding:7px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--blue);cursor:pointer">次の便 →</button>
   </div>`;
 
   // Line summary bar
@@ -915,6 +922,43 @@ function renderOneRoute(j, index) {
 }
 
 let allFoundRoutes = [];
+let lastSearchOpts = {};
+
+// 軽量トースト(前後の便が無い時の通知)
+function toast(msg) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;z-index:9999;opacity:0;transition:opacity .2s;pointer-events:none';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 1600);
+}
+
+// 前の便(dir=-1)/次の便(dir=+1)に差し替え
+function shiftTrain(index, dir) {
+  const j = allFoundRoutes[index];
+  if (!j || !j.legs || !j.legs.length) return;
+  const src = j.legs[0].from;
+  const dst = j.legs[j.legs.length - 1].to;
+  const nj = dir > 0
+    ? RouterV3.nextJourney(src, dst, j.dep, lastSearchOpts)
+    : RouterV3.prevJourney(src, dst, j.dep, lastSearchOpts);
+  if (!nj) {
+    toast(dir > 0 ? 'これより後の便は見つかりません' : 'これより前の便は見つかりません');
+    return;
+  }
+  allFoundRoutes[index] = nj;
+  const card = document.getElementById('card-' + index);
+  if (card) card.outerHTML = renderOneRoute(nj, index);
+  const det = document.getElementById('route-' + index);
+  if (det) det.classList.remove('collapsed');   // 差し替え後は展開表示
+}
+
 function renderMultipleResults(routes) {
   allFoundRoutes = routes;
   const showCount = Math.min(3, routes.length);

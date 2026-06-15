@@ -808,9 +808,9 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   if (!first) return out;
   add(first);
 
-  // 次発・次々発
+  // 次発以降を複数本(発車時刻の異なる候補を増やす)
   let t = first.dep + 1;
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < 4; i++) {
     const j = query(srcIdx, dstIdx, t, opts);
     if (!j) break;
     add(j);
@@ -830,7 +830,7 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   // (例: 柏→大宮の東武野田線)を発掘する。最速優先CSAだと速い迂回に隠れて直通が
   // 出ないため。junkはランキング+slice(下記)で落ちる。
   const banLines = new Set();
-  for (let iter = 0; iter < 2; iter++) {
+  for (let iter = 0; iter < 4; iter++) {
     for (const j of out) for (const l of j.legs) if (l.kind === 'ride') banLines.add(l.line);
     if (!add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banLines: new Set(banLines) })))) break;
   }
@@ -854,13 +854,38 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
     if (Math.abs(b.dep - a.dep) > 5) return b.dep - a.dep; // 遅く出て待たない
     return a.arr - b.arr;
   });
-  return out.slice(0, 6);   // 多様化で増えた候補のうち上位のみ(junk除去)
+  return out.slice(0, 12);   // 多様化で増えた候補のうち上位のみ(junk除去)
+}
+
+// 指定発時刻curDepの「次の便」=curDepより後に発車する最速到達経路。
+function nextJourney(srcIdx, dstIdx, curDep, opts) {
+  const j = query(srcIdx, dstIdx, curDep + 1, opts || {});
+  return (j && j.dep > curDep) ? j : null;
+}
+
+// 指定発時刻curDepの「前の便」=curDepより前に発車する経路のうち最も遅く出るもの。
+// query(L)はL以降の最速発を返す(Lについて非減少)。L<curDepを保つ最大Lを二分探索。
+function prevJourney(srcIdx, dstIdx, curDep, opts, windowMin) {
+  opts = opts || {};
+  const win = windowMin || 180;
+  let lo = curDep - win, hi = curDep;
+  let jlo = query(srcIdx, dstIdx, lo, opts);
+  if (!jlo || jlo.dep >= curDep) return null;   // 窓内に前の便なし
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    const jm = query(srcIdx, dstIdx, mid, opts);
+    if (jm && jm.dep < curDep) { lo = mid; jlo = jm; }
+    else hi = mid;
+  }
+  return jlo;
 }
 
 const RouterV3 = {
   loadBinary,
   query,
   findJourneys,
+  nextJourney,
+  prevJourney,
   journeyFare,
   journeyKm,
   legKm,
