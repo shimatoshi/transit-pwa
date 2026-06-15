@@ -515,11 +515,10 @@ function searchStations(query) {
   if (!graph || query.length < 1) return [];
   const q = query.toLowerCase();
   const results = [];
+  // 全マッチを集めてからソート。先頭で打ち切ると完全一致(例:新潟)が
+  // 部分一致(新潟大学前/東新潟/X(新潟)…)に押し出されて永久に出ない不具合になる。
   for (const s of graph._nameIndex) {
-    if (s.name.includes(query) || s.nameEn.includes(q)) {
-      results.push(s);
-      if (results.length >= 12) break;
-    }
+    if (s.name.includes(query) || s.nameEn.includes(q)) results.push(s);
   }
   results.sort((a, b) => {
     if (a.name === query && b.name !== query) return -1;
@@ -528,7 +527,7 @@ function searchStations(query) {
     if (b.name.startsWith(query) && !a.name.startsWith(query)) return 1;
     return a.name.length - b.name.length;
   });
-  return results;
+  return results.slice(0, 12);
 }
 
 function initAutocomplete() {
@@ -767,8 +766,12 @@ function doSearch() {
     if (!journeys.length) {
       const fn = graph.stations[waypointCandidates[0][0]].n;
       const tn = graph.stations[waypointCandidates[1][0]].n;
+      // 特急/新幹線OFFだと長距離は各停のみで日を跨ぎ探索不能になる→ヒント
+      const offHint = (!opts.express || !opts.shinkansen)
+        ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">特急・新幹線をOFFにしています。長距離は各駅停車のみだと日付をまたぐため経路が出ないことがあります。トグルをONにしてお試しください。</div>`
+        : '';
       document.getElementById('results').innerHTML =
-        `<div class="no-route">${fn} → ${tn} の経路が見つかりません</div>`;
+        `<div class="no-route">${fn} → ${tn} の経路が見つかりません${offHint}</div>`;
       return;
     }
     renderMultipleResults(journeys);
