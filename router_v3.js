@@ -797,6 +797,7 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   }
   function add(j) {
     if (!j) return false;
+    if (j.arr <= j.dep) return false;      // 日跨ぎ計算崩れの不正経路(到着≦出発)を排除
     const s = sig(j);
     if (sigs.has(s)) return false;
     sigs.add(s);
@@ -826,13 +827,23 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   const ban = new Set([first.legs.find(l => l.kind === 'ride').trip]);
   add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banTrips: ban })));
 
-  // 経路多様化: これまでの候補が使った路線を全て禁止して再探索し、別系統の直通
-  // (例: 柏→大宮の東武野田線)を発掘する。最速優先CSAだと速い迂回に隠れて直通が
-  // 出ないため。junkはランキング+slice(下記)で落ちる。
-  const banLines = new Set();
-  for (let iter = 0; iter < 4; iter++) {
-    for (const j of out) for (const l of j.legs) if (l.kind === 'ride') banLines.add(l.line);
-    if (!add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banLines: new Set(banLines) })))) break;
+  // 経路多様化: これまでの候補が使った路線を禁止して再探索し、別系統の直通
+  // (例: 柏→大宮の東武野田線、船橋→五反田の京成本線直通)を発掘する。最速優先CSAだと
+  // 速い迂回に隠れて直通が出ないため。junkはランキング+slice(下記)で落ちる。
+  // ただし出発駅から出る唯一の足(フィーダー路線=各経路の最初の乗車路線)はbanしない。
+  // banすると始発駅が孤立して以後の多様化が全滅する(高柳の東武野田線など)。
+  for (let iter = 0; iter < 6; iter++) {
+    const keep = new Set();   // 各候補の最初の乗車路線=フィーダーは温存
+    const banLines = new Set();
+    for (const j of out) {
+      const first = j.legs.find(l => l.kind === 'ride');
+      if (first) keep.add(first.line);
+    }
+    for (const j of out) for (const l of j.legs) {
+      if (l.kind === 'ride' && !keep.has(l.line)) banLines.add(l.line);
+    }
+    if (banLines.size === 0) break;
+    if (!add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banLines })))) break;
   }
 
   // ランキング: 有料特急/新幹線には時間ペナルティを課し、特急料金を払う価値が

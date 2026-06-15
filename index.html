@@ -244,6 +244,7 @@ body {
   padding: 0;
 }
 .route-detail.collapsed { display: none; }
+.midstops.collapsed { display: none; }
 .toggle-detail {
   display: flex;
   align-items: center;
@@ -735,8 +736,16 @@ function doSearch() {
         if (fid === tid) continue;
         let found;
         if (st.type === 'arr') {
-          const j = latestDeparture(fid, tid, st.minutes);
-          found = j ? [j] : [];
+          // 締切までに着く最遅出発を求め、その手前の窓から多様な経路を出して
+          // 締切以内のものを残す(到着指定でも複数経路を提示)
+          const jl = latestDeparture(fid, tid, st.minutes);
+          if (jl) {
+            const cands = RouterV3.findJourneys(fid, tid, Math.max(0, jl.dep - 90), opts)
+              .filter(j => j.arr <= st.minutes);
+            found = [jl, ...cands];   // 最遅出発便は必ず含める(多様化窓の外に出るため)
+          } else {
+            found = [];
+          }
         } else {
           found = RouterV3.findJourneys(fid, tid, st.minutes, opts);
         }
@@ -890,6 +899,24 @@ function renderOneRoute(j, index) {
     const fromStn = graph.stations[leg.from], toStn = graph.stations[leg.to];
     const color = lineColor(leg.line);
     const wait = prevArr != null ? leg.dep - prevArr : 0;
+    const nMid = leg.stops.length - 2;   // 途中駅数(乗車駅・降車駅を除く)
+    const stopsId = `stops-${index}-${li}`;
+    // 途中停車駅リスト(時刻つき)。発時刻d優先、無ければ着時刻a。
+    let midHtml = '';
+    if (nMid > 0) {
+      midHtml = `<div class="midstops collapsed" id="${stopsId}" style="margin-top:6px;border-left:2px solid ${color}44;padding-left:10px">`;
+      for (let mi = 1; mi <= nMid; mi++) {
+        const s = leg.stops[mi];
+        const t = s.d != null ? s.d : s.a;
+        const nm = graph.stations[s.st] ? graph.stations[s.st].n : '?';
+        midHtml += `<div style="font-size:12px;color:var(--muted);padding:2px 0">
+          <span style="display:inline-block;width:42px;color:var(--text)">${t != null ? formatTime(t) : '—'}</span>${nm}</div>`;
+      }
+      midHtml += `</div>`;
+    }
+    const stopsLabel = nMid > 0
+      ? `<span onclick="event.stopPropagation();toggleStops('${stopsId}',this)" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted">途中${nMid}駅 ▾</span>`
+      : `${leg.stops.length - 1}駅`;
     html += `<div class="step">
       <div class="step-line">
         <div class="step-dot" style="background:${color};box-shadow:0 0 0 2px ${color}"></div>
@@ -901,8 +928,9 @@ function renderOneRoute(j, index) {
           <span class="line-tag" style="background:${color}11;color:${color}">${leg.line}</span>
           ${leg.type ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${leg.type}</span>` : ''}
           ${leg.dest ? `<span style="font-size:11px">${leg.dest}行</span>` : ''}
-          ${leg.stops.length - 1}駅 ${leg.arr - leg.dep}分${wait > 0 ? ` <span style="color:var(--orange)">(待${wait}分)</span>` : ''}
+          ${stopsLabel} ${leg.arr - leg.dep}分${wait > 0 ? ` <span style="color:var(--orange)">(待${wait}分)</span>` : ''}
         </div>
+        ${midHtml}
       </div>
     </div>`;
     prevArr = leg.arr;
@@ -991,6 +1019,14 @@ function toggleRoute(routeId) {
   const el = document.getElementById(routeId);
   if (!el) return;
   el.classList.toggle('collapsed');
+}
+
+// 途中駅リストの開閉(▾/▴)
+function toggleStops(stopsId, labelEl) {
+  const el = document.getElementById(stopsId);
+  if (!el) return;
+  const open = el.classList.toggle('collapsed') === false;
+  if (labelEl) labelEl.innerHTML = labelEl.innerHTML.replace(open ? '▾' : '▴', open ? '▴' : '▾');
 }
 
 function toggleDetail() {
