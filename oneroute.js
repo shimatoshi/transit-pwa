@@ -17,13 +17,14 @@ function id(n) {
   return i;
 }
 
-const [from, to, hh] = process.argv.slice(2);
+const [from, to, hh, day] = process.argv.slice(2);  // day: 0平日/1土/2休
 const s = id(from), g = id(to);
 const out = { from, to };
 if (s < 0 || g < 0) { out.error = `駅なし s=${s} g=${g}`; console.log(JSON.stringify(out)); process.exit(0); }
 const dep0 = (hh ? parseInt(hh) : 9) * 60;
+const ropts = day != null && day !== '' ? { day: parseInt(day) } : {};
 // アプリと同じランキング1位(特急/新幹線ペナルティ込み)を採用
-const js = R.findJourneys(s, g, dep0, {});
+const js = R.findJourneys(s, g, dep0, ropts);
 const best = js[0];
 if (!best) { out.error = '経路なし'; console.log(JSON.stringify(out)); process.exit(0); }
 const fr = R.journeyFare(best);

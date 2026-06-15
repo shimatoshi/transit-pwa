@@ -121,7 +121,7 @@ def main():
 
     lines, line_idx = [], {}
     types, type_idx = [], {}
-    trips_l, trips_t, trips_d = [], [], []
+    trips_l, trips_t, trips_d, trips_c = [], [], [], []
     offsets = [0]
     st_s, st_a, st_d = [], [], []
     skipped_stops = skipped_trips = 0
@@ -143,6 +143,7 @@ def main():
         trips_l.append(line_idx[ln])
         trips_t.append(type_idx[ty])
         trips_d.append(t.get('dest') or '')
+        trips_c.append(t.get('cal', 7))   # 運転日bit(1平日2土4休)。未タグは7=毎日(安全側)
         for s in stops:
             st_s.append(k2idx[s['s']])
             st_a.append(65535 if s['a'] is None else s['a'] % 1440)
@@ -177,7 +178,7 @@ def main():
     meta = {
         'lines': lines,
         'types': types,
-        'trips': {'l': trips_l, 't': trips_t, 'd': trips_d},
+        'trips': {'l': trips_l, 't': trips_t, 'd': trips_d, 'c': trips_c},
         'footpaths': footpaths,
     }
     meta_path = os.path.join(BASE, 'trains_v3_meta.json')

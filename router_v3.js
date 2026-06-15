@@ -80,6 +80,7 @@ function loadBinary(arrayBuffer, meta, stations, fares) {
   D.tripLine = meta.trips.l;
   D.tripType = meta.trips.t;
   D.tripDest = meta.trips.d;
+  D.tripCal = meta.trips.c || null;   // 運転日bit(1平日2土4休)。無ければ無視
 
   const dv = new DataView(arrayBuffer);
   if (dv.getUint8(0) !== 0x54 || dv.getUint8(1) !== 0x56 || dv.getUint8(2) !== 0x33) {
@@ -195,6 +196,8 @@ function query(srcIdx, dstIdx, depMin, opts) {
   const useShink = opts.shinkansen !== false;
   const banTrips = opts.banTrips || null; // Set of trip ids
   const banLines = opts.banLines || null; // Set of line names (経路多様化用)
+  // 運転日フィルタ: opts.day = 0平日/1土曜/2休日。該当日に走る列車のみ。
+  const dayMask = (opts.day != null && D.tripCal) ? (1 << opts.day) : 0;
 
   const ns = D.stations.length;
   const arr = new Int32Array(ns).fill(INF);
@@ -216,6 +219,7 @@ function query(srcIdx, dstIdx, depMin, opts) {
     const trip = D.cTrip[c];
     if (banTrips && banTrips.has(trip)) continue;
     if (banLines && banLines.has(D.lines[D.tripLine[trip]])) continue;
+    if (dayMask && !(D.tripCal[trip] & dayMask)) continue;   // 該当運転日でない列車を除外
     if (!useShink && D.tripShink[trip]) continue;
     if (!useExpress && D.tripPaid[trip]) continue;
 
