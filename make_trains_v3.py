@@ -45,11 +45,24 @@ def haversine_km(la1, lo1, la2, lo2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
+OPERATOR_RE = r'^(ＪＲ|京成|京王|京急|京阪|阪急|阪神|近鉄|南海|西鉄|東武|西武|名鉄|東急|小田急|相鉄|東京メトロ|都営)'
+
+
 def base_name(name):
+    """事業者プレフィクスのみ除去: 西武新宿→新宿, 京成上野→上野。
+    操作者兄弟駅(新宿/西武新宿/京王新宿)を同一ベース名に揃える。
+    単独の「新」は剥がさない(新宿→宿 と壊れ、新宿↔西武新宿の連絡が消えるため)。"""
     n = re.sub(r'[（(].*?[)）]', '', name)
     n = re.sub(r'駅$', '', n)
-    # 事業者プレフィクスを剥がす: 京成上野→上野, ＪＲ難波→難波
-    n = re.sub(r'^(ＪＲ|京成|京王|京急|京阪|阪急|阪神|近鉄|南海|西鉄|東武|西武|名鉄|新)', '', n)
+    n = re.sub(OPERATOR_RE, '', n)
+    return n
+
+
+def base_name_shin(name):
+    """事業者プレフィクス + 先頭の「新」も除去: 新今宮→今宮, 新水前寺→水前寺。
+    新駅兄弟(今宮/新今宮)を連絡するための第2系統。base_nameと併用する。"""
+    n = base_name(name)
+    n = re.sub(r'^新', '', n)
     return n
 
 
@@ -89,18 +102,21 @@ def build_footpaths(stations):
                 if i < j:
                     consider(i, j, 0.4)
 
-    # 2) same-base-name pairs (≤1.2km)
-    byname = defaultdict(list)
-    for i, s in enumerate(stations):
-        bn = base_name(s['n'])
-        if bn:
-            byname[bn].append(i)
-    for ids in byname.values():
-        if len(ids) < 2 or len(ids) > 8:
-            continue
-        for x in range(len(ids)):
-            for y in range(x + 1, len(ids)):
-                consider(ids[x], ids[y], 1.2)
+    # 2) same-base-name pairs (≤1.2km)。2系統のベース名でグルーピングしunion:
+    #   A) 事業者プレフィクス除去  → 新宿/西武新宿 等の操作者兄弟
+    #   B) 事業者+先頭「新」除去    → 今宮/新今宮, 水前寺/新水前寺 等の新駅兄弟
+    for namer in (base_name, base_name_shin):
+        byname = defaultdict(list)
+        for i, s in enumerate(stations):
+            bn = namer(s['n'])
+            if bn:
+                byname[bn].append(i)
+        for ids in byname.values():
+            if len(ids) < 2 or len(ids) > 8:
+                continue
+            for x in range(len(ids)):
+                for y in range(x + 1, len(ids)):
+                    consider(ids[x], ids[y], 1.2)
 
     return [[i, j, w] for (i, j), w in sorted(pairs.items())]
 
