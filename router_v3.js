@@ -149,13 +149,29 @@ function loadBinary(arrayBuffer, meta, stations, fares) {
     cDepT[k] = Dp[i] + shift; cArrT[k] = arr + shift;
     cTrip[k] = t; cStopI[k] = i; k++;
   }
+  // エッジ(駅間)ごとの路線多数決マップ。直通列車は1本の路線ラベルが全区間に付くため
+  // (例:内房線快速が横浜→逗子の横須賀線区間も内房線表記)、区間ごとに最も多く走る路線で
+  // 表示を訂正する。専用線の列車が直通より多数なので多数決で正しい路線が選ばれる。
+  const NS = D.stations.length;
+  const edgeCount = new Map();   // dep*NS+arr -> Map(lineIdx->count)
   for (let t = 0; t < ntrips; t++) {
+    const li = D.tripLine[t];
     for (let i = D.tripOff[t]; i < D.tripOff[t + 1] - 1; i++) {
       if (Dp[i] >= 0 && (A[i + 1] >= 0 || Dp[i + 1] >= 0)) {
         emit(t, i, 0);
         if (Dp[i] < 360) emit(t, i, 1440);
+        const ek = D.stS[i] * NS + D.stS[i + 1];
+        let lm = edgeCount.get(ek);
+        if (!lm) { lm = new Map(); edgeCount.set(ek, lm); }
+        lm.set(li, (lm.get(li) || 0) + 1);
       }
     }
+  }
+  D.edgeDom = new Map();         // dep*NS+arr -> 最多路線lineIdx
+  for (const [ek, lm] of edgeCount) {
+    let best = -1, bc = -1;
+    for (const [li, c] of lm) if (c > bc) { bc = c; best = li; }
+    D.edgeDom.set(ek, best);
   }
   // depT昇順ソート (index sort)
   const idx = Array.from({ length: total }, (_, x) => x);
@@ -283,9 +299,24 @@ function query(srcIdx, dstIdx, depMin, opts) {
         d: D.stD[i] >= 0 ? D.stD[i] + shift : null,
       });
     }
+    // 表示用路線: この乗車区間の各エッジの多数決路線(直通の誤ラベル訂正)。
+    // 運賃計算は原ラベル(line)を使うため lineLabel は表示専用。
+    const rawLine = D.lines[D.tripLine[trip]];
+    let lineLabel = rawLine;
+    if (D.edgeDom && stops.length >= 2) {
+      const NS = D.stations.length, cnt = new Map();
+      for (let s = 0; s + 1 < stops.length; s++) {
+        const dom = D.edgeDom.get(stops[s].st * NS + stops[s + 1].st);
+        if (dom != null && dom >= 0) cnt.set(dom, (cnt.get(dom) || 0) + 1);
+      }
+      let best = -1, bc = 0;
+      for (const [li, c] of cnt) if (c > bc) { bc = c; best = li; }
+      if (best >= 0) lineLabel = D.lines[best];
+    }
     legs.unshift({
       kind: 'ride', trip,
-      line: D.lines[D.tripLine[trip]],
+      line: rawLine,
+      lineLabel,
       type: D.types[D.tripType[trip]],
       dest: D.tripDest[trip],
       stops,

@@ -829,6 +829,8 @@ const LINE_COLORS = [
   '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c',
   '#0891b2', '#be185d', '#4f46e5', '#ca8a04', '#059669',
 ];
+// 表示用路線名(直通の誤ラベルを区間多数決で訂正したlineLabelを優先)
+function dl(l) { return l.lineLabel || l.line; }
 function lineColor(name) {
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
@@ -872,12 +874,12 @@ function renderOneRoute(j, index) {
   html += `<div style="display:flex;height:4px;margin:0 16px 8px;border-radius:2px;overflow:hidden">`;
   for (const l of rides) {
     const pct = ((l.stops.length - 1) / totalStops * 100).toFixed(1);
-    html += `<div style="width:${pct}%;background:${lineColor(l.line)}"></div>`;
+    html += `<div style="width:${pct}%;background:${lineColor(dl(l))}"></div>`;
   }
   html += `</div>`;
 
   const lineNames = rides.map(l =>
-    `<span class="line-tag" style="background:${lineColor(l.line)}11;color:${lineColor(l.line)};margin:2px">${l.line}</span>`
+    `<span class="line-tag" style="background:${lineColor(dl(l))}11;color:${lineColor(dl(l))};margin:2px">${dl(l)}</span>`
   ).join('→');
   html += `<div style="padding:0 16px 10px;font-size:12px;line-height:1.8">${lineNames}</div>`;
 
@@ -900,7 +902,7 @@ function renderOneRoute(j, index) {
       continue;
     }
     const fromStn = graph.stations[leg.from], toStn = graph.stations[leg.to];
-    const color = lineColor(leg.line);
+    const color = lineColor(dl(leg));
     const wait = prevArr != null ? leg.dep - prevArr : 0;
     const nMid = leg.stops.length - 2;   // 途中駅数(乗車駅・降車駅を除く)
     const stopsId = `stops-${index}-${li}`;
@@ -928,7 +930,7 @@ function renderOneRoute(j, index) {
       <div class="step-content">
         <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${formatTime(leg.dep)}</span>${fromStn.n}</div>
         <div class="step-info">
-          <span class="line-tag" style="background:${color}11;color:${color}">${leg.line}</span>
+          <span class="line-tag" style="background:${color}11;color:${color}">${dl(leg)}</span>
           ${leg.type ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${leg.type}</span>` : ''}
           ${leg.dest ? `<span style="font-size:11px">${leg.dest}行</span>` : ''}
           ${stopsLabel} ${leg.arr - leg.dep}分${wait > 0 ? ` <span style="color:var(--orange)">(待${wait}分)</span>` : ''}
