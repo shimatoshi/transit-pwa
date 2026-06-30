@@ -670,6 +670,7 @@ function applyUrlParams() {
   const from = (p.get('from') || '').trim();
   const to   = (p.get('to')   || '').trim();
   if (!from && !to) return;
+  console.log('applyUrlParams from=' + from + ' to=' + to);
   const depInput = document.querySelector('[data-role="dep"] input');
   const arrInput = document.querySelector('[data-role="arr"] input');
   if (depInput && from) { depInput.value = from; delete selectedStations[depInput.dataset.fieldId]; }
@@ -685,7 +686,7 @@ function applyUrlParams() {
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
     const di = document.getElementById('date-input'); if (di) di.value = d;
   }
-  if (from && to) setTimeout(doSearch, 0);
+  if (from && to) { console.log('applyUrlParams -> doSearch'); setTimeout(doSearch, 0); }
 }
 
 function doSearch() {
