@@ -505,6 +505,7 @@ async function fetchBin(url) {
     document.getElementById('search-btn').disabled = false;
     console.log(`CSA loaded: ${RouterV3.data.nConn} connections, ${nTrips} trips`);
     initAutocomplete();
+    applyUrlParams();   // 外部アプリ(map-app等)からの ?from=&to=&t=&d= deep-link
   } catch (e) {
     document.getElementById('status').textContent = 'データ読み込みエラー: ' + e.message;
   }
@@ -660,6 +661,32 @@ function saveOpts() {
     if (o.shinkansen === false) document.getElementById('opt-shinkansen').checked = false;
   } catch (e) {}
 })();
+
+// === Deep-link 入口 ===
+// 外部(map-appのtransit案内 等)から ?from=駅名&to=駅名[&t=HH:MM][&d=YYYY-MM-DD]
+// で起動された場合、出発/到着欄に流し込んで自動検索する。駅名照合は doSearch の既存ロジックに委ねる。
+function applyUrlParams() {
+  const p = new URLSearchParams(location.search);
+  const from = (p.get('from') || '').trim();
+  const to   = (p.get('to')   || '').trim();
+  if (!from && !to) return;
+  const depInput = document.querySelector('[data-role="dep"] input');
+  const arrInput = document.querySelector('[data-role="arr"] input');
+  if (depInput && from) { depInput.value = from; delete selectedStations[depInput.dataset.fieldId]; }
+  if (arrInput && to)   { arrInput.value = to;   delete selectedStations[arrInput.dataset.fieldId]; }
+  const t = (p.get('t') || '').trim().replace(':', '');
+  if (/^\d{3,4}$/.test(t)) {
+    const hh = t.length === 3 ? '0' + t.slice(0, 1) : t.slice(0, 2);
+    const mm = t.slice(-2);
+    const ti = document.getElementById('time-input'); if (ti) ti.value = hh + ':' + mm;
+    const tt = document.getElementById('time-type');  if (tt) tt.value = 'dep';
+  }
+  const d = (p.get('d') || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const di = document.getElementById('date-input'); if (di) di.value = d;
+  }
+  if (from && to) setTimeout(doSearch, 0);
+}
 
 function doSearch() {
   const rows = document.querySelectorAll('.field-row');
