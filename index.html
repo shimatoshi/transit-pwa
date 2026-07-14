@@ -424,7 +424,7 @@ body {
 
 <div class="status-bar" id="status">データ読み込み中...</div>
 
-<script src="router_v3.js?v=7"></script>
+<script src="router_v3.js?v=8"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -801,7 +801,7 @@ function doSearch() {
         `<div class="no-route">${fn} → ${tn} の経路が見つかりません${offHint}</div>`;
       return;
     }
-    renderMultipleResults(journeys);
+    renderMultipleResults(journeys, true);
   } else {
     // 経由駅: 区間ごとに最早到着を連結
     let combined = null;
@@ -828,7 +828,7 @@ function doSearch() {
       }
       depMin = best.arr + 4;
     }
-    renderMultipleResults([combined]);
+    renderMultipleResults([combined], false);  // 経由指定は始発・終電の対象外
   }
 }
 
@@ -983,6 +983,23 @@ function renderOneRoute(j, index) {
 
 let allFoundRoutes = [];
 let lastSearchOpts = {};
+let cachedFirstLast = null;    // その区間の始発・終電(直行検索時のみ算出)
+let firstLastSrcDst = null;    // [src,dst] キャッシュのキー
+
+// 始発/終電の案内バー。経由駅指定の検索時や算出前・算出不能時は非表示。
+function firstLastBlockHtml() {
+  if (!cachedFirstLast) return '';
+  const { first, last } = cachedFirstLast;
+  if (!first && !last) return '';
+  if (!firstLastSrcDst) return '';
+  const [src, dst] = firstLastSrcDst;
+  const parts = [];
+  if (first) parts.push(`始発 ${formatTime(first.dep)}発`);
+  if (last) parts.push(`終電 ${formatTime(last.dep)}発`);
+  return `<div style="margin:8px 16px;padding:8px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--muted)">
+    ${graph.stations[src].n} → ${graph.stations[dst].n}: ${parts.join(' / ')} <span style="opacity:.75">(目安)</span>
+  </div>`;
+}
 
 // 軽量トースト(前後の便が無い時の通知)
 function toast(msg) {
@@ -1056,7 +1073,8 @@ function renderRoutes() {
   if (!routes.length) return;
   routes.sort(SORTERS[currentSort] || SORTERS.fast);
   const showCount = showAllRoutes ? routes.length : Math.min(3, routes.length);
-  let html = routes.length > 1 ? sortBarHtml() : '';
+  let html = `<div id="first-last-bar">${firstLastBlockHtml()}</div>`;
+  html += routes.length > 1 ? sortBarHtml() : '';
   if (routes.length > 1) {
     html += `<div style="padding:0 16px 0;font-size:13px;color:var(--muted)">${routes.length}件の経路</div>`;
   }
@@ -1071,10 +1089,24 @@ function renderRoutes() {
   document.getElementById('results').innerHTML = html;
 }
 
-function renderMultipleResults(routes) {
+// 始発・終電の計算は経路が多いと数百msかかることがあるため、結果表示を
+// 先に済ませてから非同期(次のイベントループ)で算出しバーだけ差し替える。
+function renderMultipleResults(routes, direct) {
   allFoundRoutes = routes;
   showAllRoutes = false;
+  cachedFirstLast = null;
+  firstLastSrcDst = null;
   renderRoutes();
+  if (direct && routes.length) {
+    const j = routes[0];
+    const src = j.legs[0].from, dst = j.legs[j.legs.length - 1].to;
+    setTimeout(() => {
+      cachedFirstLast = RouterV3.firstLastOfDay(src, dst, lastSearchOpts);
+      firstLastSrcDst = [src, dst];
+      const bar = document.getElementById('first-last-bar');
+      if (bar) bar.outerHTML = `<div id="first-last-bar">${firstLastBlockHtml()}</div>`;
+    }, 0);
+  }
 }
 
 function showMoreRoutes() {

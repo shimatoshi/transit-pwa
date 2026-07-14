@@ -922,12 +922,44 @@ function prevJourney(srcIdx, dstIdx, curDep, opts, windowMin) {
   return jlo;
 }
 
+// その区間の当日の始発(最初の出発)・終電(最後の出発)。
+function firstLastOfDay(srcIdx, dstIdx, opts) {
+  // 始発: 00:00起点で探すと前夜の終電の残り(乗継先を逃して未明まで待つ経路等)が
+  // 深夜0時台の出発として紛れ込む。運行の空白帯(概ね01:00〜04:00)を過ぎた
+  // 04:00起点で探し、正味の朝一番だけを拾う。
+  const first = query(srcIdx, dstIdx, 240, opts);
+
+  // 終電: 単純に「その日出せる最も遅い出発」を求めると、乗継先の終電を逃して
+  // 未明まで数時間待つ劣化ルートが「終電」として出てしまうことがある
+  // (例: 23:54発だが乗継失敗で翌04:50着、のような経路)。
+  // 夕方以降を1本ずつ次発へ辿り、所要時間が直前の便から急に跳ね上がった
+  // (=乗継先の終電切れの合図)時点の手前までを実質的な終電とする。
+  let start = null;
+  for (const anchor of [1260, 1080, 900, 720, 480, 240]) { // 21/18/15/12/8/4時
+    start = query(srcIdx, dstIdx, anchor, opts);
+    if (start) break;
+  }
+  let last = start;
+  if (start) {
+    let cur = start;
+    for (let i = 0; i < 80; i++) {
+      const nj = nextJourney(srcIdx, dstIdx, cur.dep, opts);
+      if (!nj || nj.dep >= 1440) break;   // 日付が変わったら打ち切り
+      const curDur = cur.arr - cur.dep, njDur = nj.arr - nj.dep;
+      if (njDur > curDur * 1.8 + 30) break;  // 乗継先の終電切れ=劣化ルートは不採用
+      last = cur = nj;
+    }
+  }
+  return { first, last };
+}
+
 const RouterV3 = {
   loadBinary,
   query,
   findJourneys,
   nextJourney,
   prevJourney,
+  firstLastOfDay,
   journeyFare,
   journeyKm,
   legKm,
