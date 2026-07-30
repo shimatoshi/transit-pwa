@@ -953,6 +953,81 @@ function firstLastOfDay(srcIdx, dstIdx, opts) {
   return { first, last };
 }
 
+/**
+ * arriveBy(分)までに dst へ着ける便のうち、最も遅く出るもの。
+ * 「何時までにここに着きたい」の逆算に使う。
+ *
+ * query() の到着時刻は出発キーに対して単調非減少なので二分探索できる。
+ * firstLastOfDay が警戒している「乗継を逃して未明まで待つ劣化ルート」は、
+ * ここでは arriveBy を超える到着になるため制約側で自然に落ちる。
+ *
+ * notBefore を省略すると arriveBy の8時間前(ただし04:00以降)から探す。
+ */
+function latestDeparture(srcIdx, dstIdx, arriveBy, opts, notBefore) {
+  opts = opts || {};
+  let lo = notBefore != null ? notBefore : Math.max(240, arriveBy - 480);
+  let hi = arriveBy;
+  let best = query(srcIdx, dstIdx, lo, opts);
+  if (!best || best.arr > arriveBy) return null;   // 窓の先頭の便でも間に合わない
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    const jm = query(srcIdx, dstIdx, mid, opts);
+    if (jm && jm.arr <= arriveBy) { lo = mid; best = jm; }
+    else hi = mid;
+  }
+  return best;
+}
+
+// --- 駅の発車時刻表 ---
+// connection(駅間)ではなく trip の停車列を直接走査する。connectionは出発時刻順に
+// 並んでいるが「その駅を出る便」を引くには全件走査が要るうえ深夜跨ぎの複製が混ざるため、
+// 素直に trip を辿るほうが正確で速い。終着(発車しない停車)は除く。
+// opts.day: 0=平日 1=土 2=休日。省略時は運転日で絞らない。
+function timetable(stIdx, opts) {
+  opts = opts || {};
+  const dayMask = (opts.day != null && D.tripCal) ? (1 << opts.day) : 0;
+  const ntrips = D.tripOff.length - 1;
+  const out = [];
+  for (let t = 0; t < ntrips; t++) {
+    if (dayMask && !(D.tripCal[t] & dayMask)) continue;
+    const s0 = D.tripOff[t], s1 = D.tripOff[t + 1];
+    for (let i = s0; i < s1 - 1; i++) {
+      if (D.stS[i] !== stIdx) continue;
+      const dep = D.stD[i];
+      if (dep < 0) continue;
+      const nextSt = D.stations[D.stS[i + 1]];
+      // 路線名は「この駅→次駅」区間の多数決(edgeDom)を優先する。直通列車には全区間に
+      // 1本の路線ラベルが付くため、素のtripLineだと成田線直通が柏でも「成田線」になり、
+      // 同じ列車が常磐線/成田線の2本に見えてしまう。区間の実態に合わせると1本に畳まれる。
+      const ek = D.stS[i] * D.stations.length + D.stS[i + 1];
+      const dom = D.edgeDom ? D.edgeDom.get(ek) : undefined;
+      const lineIdx = (dom != null && dom >= 0) ? dom : D.tripLine[t];
+      out.push({
+        dep: ((dep % 1440) + 1440) % 1440,   // 日跨ぎ正規化を時計時刻へ戻す
+        line: D.lines[lineIdx] || '',
+        type: D.types[D.tripType[t]] || '',
+        dest: D.tripDest[t] || '',
+        next: nextSt ? nextSt.n : '',
+        paid: !!(D.tripPaid && D.tripPaid[t]),
+        shinkansen: !!(D.tripShink && D.tripShink[t]),
+        trip: t,
+      });
+    }
+  }
+  out.sort((a, b) => a.dep - b.dep || (a.line < b.line ? -1 : a.line > b.line ? 1 : 0));
+  // 元データには同一列車が運転日パターン違いで二重登録されている個体がある
+  // (例: 柏 00:06 常磐線快速上野行 = trip92224(cal=1) と trip92225(cal=7) が停車列まで同一)。
+  // 経路検索では最速1本が選ばれるので無害だが、時刻表は二重に並ぶので畳む。
+  // 同一分・同一路線・同一種別・同一行先・同一次駅の別列車は実在しないため、これをキーにする。
+  const seen = new Set();
+  return out.filter(d => {
+    const k = d.dep + '|' + d.line + '|' + d.type + '|' + d.dest + '|' + d.next;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 const RouterV3 = {
   loadBinary,
   query,
@@ -960,10 +1035,12 @@ const RouterV3 = {
   nextJourney,
   prevJourney,
   firstLastOfDay,
+  latestDeparture,
   journeyFare,
   journeyKm,
   legKm,
   lineCompany,
+  timetable,
   get data() { return D; },
 };
 
