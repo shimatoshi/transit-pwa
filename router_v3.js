@@ -13,6 +13,9 @@
 'use strict';
 
 const MIN_TRANSFER = 4;   // 同一駅乗換の標準バッファ(分)
+// バスが絡む乗換は道路事情で遅れるうえ、CSAは最早到着しか見ないので「1区間だけ
+// バスに乗って数分早い」経路が上位に出やすい。バッファを厚くして抑制する。
+const BUS_TRANSFER = 6;
 // 直線距離→営業キロの補正係数。2026-06に実営業キロ25区間で再校正(旧1.12は過大)。
 // 線形がうねる会社は fares.json の km_scale で追加補正
 const RAIL_KM_FACTOR = 1.06;
@@ -81,6 +84,8 @@ function loadBinary(arrayBuffer, meta, stations, fares) {
   D.tripType = meta.trips.t;
   D.tripDest = meta.trips.d;
   D.tripCal = meta.trips.c || null;   // 運転日bit(1平日2土4休)。無ければ無視
+  D.tripMode = meta.trips.m || null;  // 0=鉄道 1=バス。無ければ全て鉄道扱い(後方互換)
+  D.sources = meta.sources || null;   // バス等の出典表示(CC BY の表示義務)
 
   const dv = new DataView(arrayBuffer);
   if (dv.getUint8(0) !== 0x54 || dv.getUint8(1) !== 0x56 || dv.getUint8(2) !== 0x33) {
@@ -153,13 +158,18 @@ function loadBinary(arrayBuffer, meta, stations, fares) {
   // (例:内房線快速が横浜→逗子の横須賀線区間も内房線表記)、区間ごとに最も多く走る路線で
   // 表示を訂正する。専用線の列車が直通より多数なので多数決で正しい路線が選ばれる。
   const NS = D.stations.length;
+  if (NS * NS > Number.MAX_SAFE_INTEGER) throw new Error('駅数が多すぎてedgeDomのキーが壊れる');
   const edgeCount = new Map();   // dep*NS+arr -> Map(lineIdx->count)
   for (let t = 0; t < ntrips; t++) {
     const li = D.tripLine[t];
+    // バスは直通の誤ラベルが無いので多数決は不要。全国投入時に数十万エントリを
+    // 積むだけの純コストになるのでスキップする
+    const isBus = D.tripMode ? D.tripMode[t] === 1 : false;
     for (let i = D.tripOff[t]; i < D.tripOff[t + 1] - 1; i++) {
       if (Dp[i] >= 0 && (A[i + 1] >= 0 || Dp[i + 1] >= 0)) {
         emit(t, i, 0);
         if (Dp[i] < 360) emit(t, i, 1440);
+        if (isBus) continue;
         const ek = D.stS[i] * NS + D.stS[i + 1];
         let lm = edgeCount.get(ek);
         if (!lm) { lm = new Map(); edgeCount.set(ek, lm); }
@@ -214,6 +224,8 @@ function query(srcIdx, dstIdx, depMin, opts) {
   const banLines = opts.banLines || null; // Set of line names (経路多様化用)
   // 運転日フィルタ: opts.day = 0平日/1土曜/2休日。該当日に走る列車のみ。
   const dayMask = (opts.day != null && D.tripCal) ? (1 << opts.day) : 0;
+  const noBus = !!opts.noBus && !!D.tripMode;   // バスを使わない
+  const mode = D.tripMode;
 
   const ns = D.stations.length;
   const arr = new Int32Array(ns).fill(INF);
@@ -236,14 +248,20 @@ function query(srcIdx, dstIdx, depMin, opts) {
     if (banTrips && banTrips.has(trip)) continue;
     if (banLines && banLines.has(D.lines[D.tripLine[trip]])) continue;
     if (dayMask && !(D.tripCal[trip] & dayMask)) continue;   // 該当運転日でない列車を除外
+    if (noBus && mode[trip] === 1) continue;
     if (!useShink && D.tripShink[trip]) continue;
     if (!useExpress && D.tripPaid[trip]) continue;
 
     const dS = D.cDepS[c];
     let board = tripBoard[trip] !== -1;
     if (!board && arr[dS] < INF) {
-      // 同一駅乗換バッファ。出発駅(=直接歩いて来た/検索起点)はバッファ0
-      const buf = (dS === srcIdx || inFoot[dS] >= 0) && inConn[dS] === -1 ? 0 : MIN_TRANSFER;
+      // 同一駅乗換バッファ。出発駅(=直接歩いて来た/検索起点)はバッファ0。
+      // バスが絡む乗換(乗る側・降りた側のどちらか)は厚めのバッファを使う
+      let buf = 0;
+      if (!((dS === srcIdx || inFoot[dS] >= 0) && inConn[dS] === -1)) {
+        const prevBus = inConn[dS] >= 0 && mode && mode[D.cTrip[inConn[dS]]] === 1;
+        buf = (mode && mode[trip] === 1) || prevBus ? BUS_TRANSFER : MIN_TRANSFER;
+      }
       if (arr[dS] + buf <= dT) board = true;
     }
     if (!board) continue;
@@ -315,6 +333,7 @@ function query(srcIdx, dstIdx, depMin, opts) {
     }
     legs.unshift({
       kind: 'ride', trip,
+      mode: (D.tripMode && D.tripMode[trip]) || 0,   // 0=鉄道 1=バス
       line: rawLine,
       lineLabel,
       type: D.types[D.tripType[trip]],
@@ -515,7 +534,7 @@ function lookupFare(company, distKm) {
 // 会社はレグのラベルではなく解決済みセグメント(スカイライナーの本線ラベル誤り対策)
 function journeySurcharge(journey, firstCompany, lastCompany) {
   if (!D.fares || !D.fares.surcharges) return [];
-  const rides = journey.legs.filter(l => l.kind === 'ride');
+  const rides = journey.legs.filter(l => l.kind === 'ride' && l.mode !== 1);
   if (!rides.length) return [];
   const first = rides[0], last = rides[rides.length - 1];
   const oName = D.stations[first.stops[0].st].n;
@@ -749,10 +768,14 @@ function premiumYen(ex, group, type, km) {
 }
 
 function journeyFare(journey) {
-  // レグ→会社分割パーツ→隣接同グループをマージして運賃合算
+  // レグ→会社分割パーツ→隣接同グループをマージして運賃合算。
+  // バスレグは fares.json(鉄道の営業キロ制)の対象外なので運賃計算から外し、
+  // 本数だけ返す(UIは「バス運賃別途」と出す)。
   const segs = [];
+  let busLegs = 0;
   for (const leg of journey.legs) {
     if (leg.kind !== 'ride') continue;
+    if (leg.mode === 1) { busLegs++; continue; }
     for (const p of legParts(leg)) {
       const isJR = p.company === 'JR';
       const last = segs[segs.length - 1];
@@ -806,7 +829,7 @@ function journeyFare(journey) {
   for (const e of expressFares(journey)) {
     total += e.fare; breakdown.push(e);
   }
-  return { total, breakdown };
+  return { total, breakdown, busLegs };
 }
 
 function journeyKm(journey) {

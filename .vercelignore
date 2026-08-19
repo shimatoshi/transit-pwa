@@ -9,3 +9,7 @@ ekitan_stations.json
 *.log
 __pycache__
 .vercel
+bus_trips.json
+data
+test_rail_baseline.json
+test_bus_router.js
