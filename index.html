@@ -361,6 +361,14 @@ body {
   font-size: 11px;
   color: var(--muted);
 }
+.credits {
+  padding: 4px 16px 10px;
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--muted);
+  text-align: center;
+}
+.credits a { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -411,6 +419,7 @@ body {
   <div class="opt-toggles">
     <label><input type="checkbox" id="opt-express" checked onchange="saveOpts()"> 特急を使う</label>
     <label><input type="checkbox" id="opt-shinkansen" checked onchange="saveOpts()"> 新幹線を使う</label>
+    <label><input type="checkbox" id="opt-bus" checked onchange="saveOpts()"> バスを使う</label>
   </div>
   <button class="search-btn" id="search-btn" onclick="doSearch()" disabled>検索</button>
 </div>
@@ -423,8 +432,10 @@ body {
 </div>
 
 <div class="status-bar" id="status">データ読み込み中...</div>
+<!-- 出典表示。CC BY 系のデータは表示が義務なので trains_v3_meta.json の sources から生成する -->
+<div class="credits" id="credits"></div>
 
-<script src="router_v3.js?v=8"></script>
+<script src="router_v3.js?v=9"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -479,10 +490,10 @@ async function fetchBin(url) {
 (async () => {
   try {
     const [graphData, meta, fares, bin] = await Promise.all([
-      fetch('graph_v2.json?v=3').then(r => r.json()),
-      fetch('trains_v3_meta.json?v=2').then(r => r.json()),
+      fetch('graph_v2.json?v=4').then(r => r.json()),
+      fetch('trains_v3_meta.json?v=3').then(r => r.json()),
       fetch('fares.json?v=10').then(r => r.json()),
-      fetchBin('trains_v3.bin.gz?v=2'),
+      fetchBin('trains_v3.bin.gz?v=3'),
     ]);
     graph = graphData;
     // Pre-build name index for fast search
@@ -494,14 +505,24 @@ async function fetchBin(url) {
         name: s.n,
         nameEn: (s.e || '').toLowerCase(),
         pref: s.p,
-        lines: s.l,
+        // バス停は路線名(l)を持たず系統名(sys)を持つ。路線色ロジックが系統名で
+        // 暴発しないようキーを分けてある
+        lines: s.m ? (s.sys || []) : s.l,
+        mode: s.m ? 1 : 0,
       });
     }
     RouterV3.loadBinary(bin, meta, graph.stations, fares);
     const nTrips = meta.trips.l.length;
+    const nBusStops = graph.stats.bus_stops || 0;
+    const nBusTrips = (meta.trips.m || []).reduce((a, b) => a + b, 0);
     document.getElementById('badge').textContent = `${graph.stats.stations}駅`;
     document.getElementById('status').textContent =
-      `${graph.stats.stations}駅 / ${nTrips.toLocaleString()}本の列車 / オフライン対応`;
+      `${graph.stats.stations}駅` +
+      (nBusStops ? ` + ${nBusStops.toLocaleString()}バス停` : '') +
+      ` / ${(nTrips - nBusTrips).toLocaleString()}本の列車` +
+      (nBusTrips ? ` + ${nBusTrips.toLocaleString()}便のバス` : '') +
+      ` / オフライン対応`;
+    renderCredits(meta.sources);
     document.getElementById('search-btn').disabled = false;
     console.log(`CSA loaded: ${RouterV3.data.nConn} connections, ${nTrips} trips`);
     initAutocomplete();
@@ -510,6 +531,27 @@ async function fetchBin(url) {
     document.getElementById('status').textContent = 'データ読み込みエラー: ' + e.message;
   }
 })();
+
+// === 出典表示 ===
+// CC BY 4.0 等は「クレジット表示」がライセンス条件なので、同梱した外部データの
+// 出典・ライセンスを必ず画面に出す。内容は make_trains_v3.py が meta.sources に書く。
+function renderCredits(sources) {
+  const el = document.getElementById('credits');
+  if (!el) return;
+  const esc = s => String(s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const items = Object.values(sources || {}).map(s => {
+    const name = s.catalog
+      ? `<a href="${esc(s.catalog)}" target="_blank" rel="noopener">${esc(s.name)}</a>` : esc(s.name);
+    const lic = s.license_url
+      ? `<a href="${esc(s.license_url)}" target="_blank" rel="noopener">${esc(s.license)}</a>` : esc(s.license);
+    const days = s.rep_days ? Object.entries(s.rep_days).map(([k, v]) => `${k} ${v}`).join(' / ') : '';
+    return `${name}: ${esc(s.attribution)} (${lic})${days ? `<br>ダイヤ基準日 — ${esc(days)}` : ''}`;
+  });
+  el.innerHTML = items.length
+    ? `バスデータ出典 — ${items.join(' ／ ')}<br>バス区間の運賃は計算対象外です。`
+    : '';
+}
 
 // === Autocomplete ===
 function searchStations(query) {
@@ -526,6 +568,8 @@ function searchStations(query) {
     if (b.name === query && a.name !== query) return 1;
     if (a.name.startsWith(query) && !b.name.startsWith(query)) return -1;
     if (b.name.startsWith(query) && !a.name.startsWith(query)) return 1;
+    // 同じ関連度なら鉄道駅を上に。バス停は数が多く、駅名サジェストを汚しやすい
+    if (a.mode !== b.mode) return a.mode - b.mode;
     return a.name.length - b.name.length;
   });
   return results.slice(0, 12);
@@ -555,8 +599,8 @@ function setupFieldAC(row) {
     dropdown.innerHTML = results.map(s => `
       <div class="ac-item" data-id="${s.id}">
         <div>
-          <div class="ac-name">${s.name}</div>
-          <div class="ac-sub">${s.pref ? s.pref + ' / ' : ''}${s.lines.length ? s.lines[0] : ''}</div>
+          <div class="ac-name">${s.mode === 1 ? '&#128652; ' : ''}${s.name}</div>
+          <div class="ac-sub">${s.mode === 1 ? 'バス停 / ' : ''}${s.pref ? s.pref + ' / ' : ''}${s.lines.length ? s.lines[0] : ''}</div>
         </div>
       </div>
     `).join('');
@@ -644,7 +688,10 @@ function findAllByName(name) {
       if (strip(graph.stations[i].n) === strip(name)) ids.push(i);
     }
   }
-  return ids;
+  // 同名の鉄道駅とバス停が両方ある場合(新橋・九段下等 71件)は鉄道駅だけを起終点にする。
+  // バス停側へは徒歩連絡で届くので、候補を増やして検索回数を倍にする価値がない
+  const rail = ids.filter(i => !graph.stations[i].m);
+  return rail.length ? rail : ids;
 }
 
 // === Search ===
@@ -652,6 +699,7 @@ function saveOpts() {
   localStorage.setItem('routeOpts', JSON.stringify({
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
+    bus: document.getElementById('opt-bus').checked,
   }));
 }
 (function restoreOpts() {
@@ -659,6 +707,7 @@ function saveOpts() {
     const o = JSON.parse(localStorage.getItem('routeOpts') || '{}');
     if (o.express === false) document.getElementById('opt-express').checked = false;
     if (o.shinkansen === false) document.getElementById('opt-shinkansen').checked = false;
+    if (o.bus === false) document.getElementById('opt-bus').checked = false;
   } catch (e) {}
 })();
 
@@ -736,6 +785,7 @@ function doSearch() {
   const opts = {
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
+    noBus: !document.getElementById('opt-bus').checked,
     day: getDayType(),               // 運転日フィルタ(0平日/1土/2休)
   };
   lastSearchOpts = opts;             // 前の便/次の便で再利用
@@ -856,6 +906,7 @@ const LINE_COLORS = [
   '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c',
   '#0891b2', '#be185d', '#4f46e5', '#ca8a04', '#059669',
 ];
+const BUS_COLOR = '#2e7d32';   // バスは路線色ハッシュを使わず専用色で統一する
 // 表示用路線名(直通の誤ラベルを区間多数決で訂正したlineLabelを優先)
 function dl(l) { return l.lineLabel || l.line; }
 function lineColor(name) {
@@ -863,6 +914,9 @@ function lineColor(name) {
   for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
   return LINE_COLORS[Math.abs(hash) % LINE_COLORS.length];
 }
+// legの表示色。バス(mode=1)は系統名でハッシュせずバス専用色にする
+function legColor(l) { return l.mode === 1 ? BUS_COLOR : lineColor(dl(l)); }
+const isBusLeg = l => l.mode === 1;
 
 // === Rendering (journey = RouterV3.findJourneys の結果) ===
 function renderOneRoute(j, index) {
@@ -872,6 +926,7 @@ function renderOneRoute(j, index) {
   const km = RouterV3.journeyKm(j);
   const fare = RouterV3.journeyFare(j);
   const rides = j.legs.filter(l => l.kind === 'ride');
+  const nBusRides = rides.filter(isBusLeg).length;
 
   const routeId = 'route-' + index;
   let html = `<div class="route-card" id="card-${index}">`;
@@ -879,7 +934,7 @@ function renderOneRoute(j, index) {
   html += `<div class="route-summary" onclick="toggleRoute('${routeId}')" style="cursor:pointer">
     <div style="flex:1">
       <div style="font-size:20px;font-weight:700;color:var(--blue)">${depStr} → ${arrStr}</div>
-      <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${j.transfers > 0 ? j.transfers + '回乗換' : '直通'} / ${km.toFixed(1)}km</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${j.transfers > 0 ? j.transfers + '回乗換' : '直通'} / ${km.toFixed(1)}km${nBusRides ? ` / <span style="color:${BUS_COLOR};font-weight:600">&#128652; バス${nBusRides}回</span>` : ''}</div>
     </div>
     <div style="text-align:right">
       <div style="font-size:18px;font-weight:700;color:var(--text)">¥${fare.total.toLocaleString()}</div>
@@ -887,6 +942,7 @@ function renderOneRoute(j, index) {
         const ex = fare.breakdown.filter(b => /料金$/.test(b.company)).reduce((a, b) => a + b.fare, 0);
         return ex > 0 ? `<div style="font-size:11px;color:var(--muted)">うち特急料金 ¥${ex.toLocaleString()}</div>` : '';
       })()}
+      ${nBusRides ? `<div style="font-size:11px;color:var(--orange)">バス運賃別途</div>` : ''}
     </div>
   </div>`;
 
@@ -901,12 +957,12 @@ function renderOneRoute(j, index) {
   html += `<div style="display:flex;height:4px;margin:0 16px 8px;border-radius:2px;overflow:hidden">`;
   for (const l of rides) {
     const pct = ((l.stops.length - 1) / totalStops * 100).toFixed(1);
-    html += `<div style="width:${pct}%;background:${lineColor(dl(l))}"></div>`;
+    html += `<div style="width:${pct}%;background:${legColor(l)}"></div>`;
   }
   html += `</div>`;
 
   const lineNames = rides.map(l =>
-    `<span class="line-tag" style="background:${lineColor(dl(l))}11;color:${lineColor(dl(l))};margin:2px">${dl(l)}</span>`
+    `<span class="line-tag" style="background:${legColor(l)}11;color:${legColor(l)};margin:2px">${isBusLeg(l) ? '&#128652; ' : ''}${dl(l)}</span>`
   ).join('→');
   html += `<div style="padding:0 16px 10px;font-size:12px;line-height:1.8">${lineNames}</div>`;
 
@@ -929,7 +985,9 @@ function renderOneRoute(j, index) {
       continue;
     }
     const fromStn = graph.stations[leg.from], toStn = graph.stations[leg.to];
-    const color = lineColor(dl(leg));
+    const color = legColor(leg);
+    const bus = isBusLeg(leg);
+    const unit = bus ? '停留所' : '駅';
     const wait = prevArr != null ? leg.dep - prevArr : 0;
     const nMid = leg.stops.length - 2;   // 途中駅数(乗車駅・降車駅を除く)
     const stopsId = `stops-${index}-${li}`;
@@ -947,8 +1005,8 @@ function renderOneRoute(j, index) {
       midHtml += `</div>`;
     }
     const stopsLabel = nMid > 0
-      ? `<span onclick="event.stopPropagation();toggleStops('${stopsId}',this)" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted">途中${nMid}駅 ▾</span>`
-      : `${leg.stops.length - 1}駅`;
+      ? `<span onclick="event.stopPropagation();toggleStops('${stopsId}',this)" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted">途中${nMid}${unit} ▾</span>`
+      : `${leg.stops.length - 1}${unit}`;
     html += `<div class="step">
       <div class="step-line">
         <div class="step-dot" style="background:${color};box-shadow:0 0 0 2px ${color}"></div>
@@ -957,7 +1015,7 @@ function renderOneRoute(j, index) {
       <div class="step-content">
         <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${formatTime(leg.dep)}</span>${fromStn.n}</div>
         <div class="step-info">
-          <span class="line-tag" style="background:${color}11;color:${color}">${dl(leg)}</span>
+          <span class="line-tag" style="background:${color}11;color:${color}">${bus ? '&#128652; ' : ''}${dl(leg)}</span>
           ${leg.type ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${leg.type}</span>` : ''}
           ${leg.dest ? `<span style="font-size:11px">${leg.dest}行</span>` : ''}
           ${stopsLabel} ${leg.arr - leg.dep}分${wait > 0 ? ` <span style="color:var(--orange)">(待${wait}分)</span>` : ''}

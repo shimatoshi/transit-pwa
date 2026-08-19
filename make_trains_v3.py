@@ -25,6 +25,11 @@ connections at +1440 for searches across midnight.
 Footpaths: station pairs within 400m straight-line, plus same-base-name
 pairs (船橋/京成船橋, 上野/京成上野) within 1.2km.
 walk minutes = round(km * 15) + 3 (15min/km + 乗換バッファ).
+
+バス (gtfs_to_trains.py が作る bus_trips.json) があれば鉄道 trip の後ろに連結する。
+バイナリ形式は無変更 (TV3 / uint16)。モードは trip 属性なので meta.trips.m に置く。
+バス停の徒歩連絡は鉄道⇄バスのみ生成する(バス停同士は組合せ爆発するうえ、
+同一停留所は既にクラスタへ畳んであるため不要)。
 """
 
 import gzip
@@ -66,6 +71,9 @@ def base_name_shin(name):
     return n
 
 
+BUS_STATION_RE = re.compile(r'^(.+?)駅')
+
+
 def build_footpaths(stations):
     cell = 0.005
     grid = defaultdict(list)
@@ -74,6 +82,7 @@ def build_footpaths(stations):
             continue
         grid[(int(s['la'] / cell), int(s['lo'] / cell))].append(i)
 
+    isbus = [bool(s.get('m')) for s in stations]
     pairs = {}
 
     def consider(i, j, max_km):
@@ -91,7 +100,8 @@ def build_footpaths(stations):
             if key not in pairs or pairs[key] > walk:
                 pairs[key] = walk
 
-    # 1) proximity pairs (≤400m)
+    # 1) proximity pairs (≤400m)。バス停同士は張らない(全国規模で組合せ爆発し、
+    #    かつ同一停留所は既にクラスタへ畳んであるので意味がない)
     for (gy, gx), ids in grid.items():
         neigh = []
         for dy in (-1, 0, 1):
@@ -99,15 +109,18 @@ def build_footpaths(stations):
                 neigh.extend(grid.get((gy + dy, gx + dx), []))
         for i in ids:
             for j in neigh:
-                if i < j:
+                if i < j and not (isbus[i] and isbus[j]):
                     consider(i, j, 0.4)
 
     # 2) same-base-name pairs (≤1.2km)。2系統のベース名でグルーピングしunion:
     #   A) 事業者プレフィクス除去  → 新宿/西武新宿 等の操作者兄弟
     #   B) 事業者+先頭「新」除去    → 今宮/新今宮, 水前寺/新水前寺 等の新駅兄弟
+    #   バス停には適用しない。1.2kmだと同名停留所が大量に誤結合する
     for namer in (base_name, base_name_shin):
         byname = defaultdict(list)
         for i, s in enumerate(stations):
+            if isbus[i]:
+                continue
             bn = namer(s['n'])
             if bn:
                 byname[bn].append(i)
@@ -117,6 +130,24 @@ def build_footpaths(stations):
             for x in range(len(ids)):
                 for y in range(x + 1, len(ids)):
                     consider(ids[x], ids[y], 1.2)
+
+    # 3) 「◯◯駅前 / ◯◯駅西口」バス停 → 鉄道駅「◯◯」(≤600m)。
+    #    近接400mから漏れる駅前ロータリーを拾うための限定ルール
+    railbyname = defaultdict(list)
+    for i, s in enumerate(stations):
+        if isbus[i]:
+            continue
+        bn = base_name(s['n'])
+        if bn:
+            railbyname[bn].append(i)
+    for i, s in enumerate(stations):
+        if not isbus[i]:
+            continue
+        m = BUS_STATION_RE.match(s['n'])
+        if not m:
+            continue
+        for j in railbyname.get(base_name(m.group(1)), ()):
+            consider(i, j, 0.6)
 
     return [[i, j, w] for (i, j), w in sorted(pairs.items())]
 
@@ -131,13 +162,26 @@ def main():
         g = json.load(f)
     stations = g['stations']
     k2idx = {s['k']: i for i, s in enumerate(stations) if s.get('k')}
+    if len(stations) > 65535:
+        raise SystemExit(f'駅数 {len(stations)} が uint16 上限超過。TV4(uint32)化が必要')
 
     with open(os.path.join(BASE, 'trains.json')) as f:
         trains = json.load(f)['trains']
 
+    bus = None
+    bus_path = os.path.join(BASE, 'bus_trips.json')
+    if os.path.exists(bus_path):
+        with open(bus_path) as f:
+            bus = json.load(f)
+        n_bus_st = sum(1 for s in stations if s.get('m'))
+        if n_bus_st != bus['meta']['bus_stops']:
+            raise SystemExit(
+                f"bus_trips.json のバス停数 {bus['meta']['bus_stops']} と graph_v2.json の "
+                f"{n_bus_st} が食い違う。gtfs_to_trains.py を流し直すこと")
+
     lines, line_idx = [], {}
     types, type_idx = [], {}
-    trips_l, trips_t, trips_d, trips_c = [], [], [], []
+    trips_l, trips_t, trips_d, trips_c, trips_m = [], [], [], [], []
     offsets = [0]
     st_s, st_a, st_d = [], [], []
     skipped_stops = skipped_trips = 0
@@ -160,14 +204,47 @@ def main():
         trips_t.append(type_idx[ty])
         trips_d.append(t.get('dest') or '')
         trips_c.append(t.get('cal', 7))   # 運転日bit(1平日2土4休)。未タグは7=毎日(安全側)
+        trips_m.append(0)
         for s in stops:
             st_s.append(k2idx[s['s']])
             st_a.append(65535 if s['a'] is None else s['a'] % 1440)
             st_d.append(65535 if s['d'] is None else s['d'] % 1440)
         offsets.append(len(st_s))
 
+    n_rail_trips, n_rail_stops = len(trips_l), len(st_s)
+    print(f"rail trips: {n_rail_trips} (skipped {skipped_trips}), "
+          f"stops: {n_rail_stops} (skipped {skipped_stops})")
+
+    # --- バス trip を連結 (graph_v2 のバス停インデックスは gtfs_to_trains.py が解決済み) ---
+    if bus:
+        n_st = len(stations)
+        for t in bus['trips']:
+            if any(not (0 <= s['s'] < n_st) or not stations[s['s']].get('m') for s in t['stops']):
+                raise SystemExit('bus_trips.json の停留所インデックスが graph_v2.json と不整合')
+            ln = t['line'] or ''
+            if ln not in line_idx:
+                line_idx[ln] = len(lines)
+                lines.append(ln)
+            ty = t.get('type') or ''
+            if ty not in type_idx:
+                type_idx[ty] = len(types)
+                types.append(ty)
+            trips_l.append(line_idx[ln])
+            trips_t.append(type_idx[ty])
+            trips_d.append(t.get('dest') or '')
+            trips_c.append(t.get('cal', 7))
+            trips_m.append(1)
+            for s in t['stops']:
+                st_s.append(s['s'])
+                st_a.append(65535 if s['a'] is None else s['a'] % 1440)
+                st_d.append(65535 if s['d'] is None else s['d'] % 1440)
+            offsets.append(len(st_s))
+        print(f"bus trips: {len(trips_l) - n_rail_trips}, "
+              f"stops: {len(st_s) - n_rail_stops} "
+              f"({', '.join(f['name'] for f in bus['meta']['feeds'].values())})")
+
     ntrips, nstops = len(trips_l), len(st_s)
-    print(f"trips: {ntrips} (skipped {skipped_trips}), stops: {nstops} (skipped {skipped_stops})")
+    print(f"total trips: {ntrips}, stops: {nstops}")
     print(f"lines: {len(lines)}, types: {len(types)}")
 
     buf = bytearray()
@@ -189,14 +266,20 @@ def main():
         f.write(buf)
 
     footpaths = build_footpaths(stations)
-    print(f"footpaths: {len(footpaths)}")
+    n_mixed = sum(1 for i, j, _ in footpaths
+                  if bool(stations[i].get('m')) != bool(stations[j].get('m')))
+    print(f"footpaths: {len(footpaths)} (うち鉄道⇄バス {n_mixed})")
 
     meta = {
         'lines': lines,
         'types': types,
-        'trips': {'l': trips_l, 't': trips_t, 'd': trips_d, 'c': trips_c},
+        # m: 0=鉄道 1=バス。trip単位の属性なので bin ではなく meta 側に置く
+        'trips': {'l': trips_l, 't': trips_t, 'd': trips_d, 'c': trips_c, 'm': trips_m},
         'footpaths': footpaths,
     }
+    if bus:
+        # CC BY の表示義務。index.html のクレジットはここから描画する
+        meta['sources'] = bus['meta']['feeds']
     meta_path = os.path.join(BASE, 'trains_v3_meta.json')
     with open(meta_path, 'w') as f:
         json.dump(meta, f, ensure_ascii=False, separators=(',', ':'))
