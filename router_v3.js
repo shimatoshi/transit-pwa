@@ -805,9 +805,35 @@ function convExpressFare(type, line, km) {
   return bandLookup(ex.conventional[key], km);
 }
 
+// --- 座席種別(指定席/自由席) ---
+const SEAT_RESERVED = 'reserved';
+const SEAT_NONRESERVED = 'nonreserved';
+
+// 課金単位uに自由席があるなら指定席料金からの控除額(負値)、無ければ null。
+// fares.json の express.seat に系統/会社のbandが無い = その列車に自由席の設定が無い、
+// という約束にしてある(私鉄の座席指定制列車・ミニ新幹線・全車指定席のJR特急)。
+function seatDelta(u) {
+  const ex = D.fares && D.fares.express;
+  const seat = ex && ex.seat;
+  if (!seat) return null;
+  const type = u.type || '';
+  if ((seat.reserved_only || []).some(n => type.includes(n))) return null;
+  if (u.kind === 'shinkansen') {
+    const tb = (seat.shinkansen || {})[u.group];
+    return tb ? bandLookup(tb, u.km) : null;
+  }
+  // 固有名で定額を引く列車(スカイライナー/ミュースカイ等)は全て座席指定制
+  for (const name of Object.keys(ex.conv_by_name || {})) if (type.includes(name)) return null;
+  const key = isJRLine(u.line) ? 'JR' : lineCompany(u.line);
+  const tb = (seat.conventional || {})[key];
+  return tb ? bandLookup(tb, u.km) : null;
+}
+
 // journey全体の特急料金内訳。連続する同系統の新幹線legは通算1枚にまとめ、
 // 新幹線に隣接するJR在来線特急は乗継割引(半額)。
-function expressFares(journey) {
+// seat: 'reserved'(既定) | 'nonreserved'。自由席の設定が無い列車(全車指定席)は
+// seat に関わらず指定席料金のまま出す。
+function expressFares(journey, seat) {
   const ex = D.fares && D.fares.express;
   if (!ex) return [];
   const rides = journey.legs.filter(l => l.kind === 'ride');
@@ -832,18 +858,26 @@ function expressFares(journey) {
   });
   const out = [];
   units.forEach((u, k) => {
+    const delta = seatDelta(u);            // null=自由席なし(全車指定席)
+    const nonres = delta != null && seat === SEAT_NONRESERVED;
+    // 自由席がある列車だけ席種を明記する。全車指定席は種別名で自明なので付けない。
+    const suffix = delta == null ? '' : (nonres ? '(自由席)' : '(指定席)');
     if (u.kind === 'shinkansen') {
       const base = bandLookup(ex.groups[u.group], u.km);
-      const prem = premiumYen(ex, u.group, u.type, u.km);
-      out.push({ company: (u.type || '新幹線') + '特急料金', dist: 0, fare: base + prem });
+      // 自由席には速達加算(のぞみ/はやぶさ等)が乗らないので base+delta で引き直す
+      const fare = nonres ? base + delta : base + premiumYen(ex, u.group, u.type, u.km);
+      out.push({ company: (u.type || '新幹線') + '特急料金' + suffix, dist: 0, fare,
+                 seat: nonres ? SEAT_NONRESERVED : SEAT_RESERVED, seatOptional: delta != null });
     } else {
       let fare = convExpressFare(u.type, u.line, u.km);
       if (!fare) return;
+      if (nonres) fare = Math.max(0, fare + delta);
       // 乗継割引: 新幹線と隣接するJR在来線特急は半額
       const adjShink = (units[k - 1] && units[k - 1].kind === 'shinkansen') ||
                        (units[k + 1] && units[k + 1].kind === 'shinkansen');
       if (adjShink && isJRLine(u.line)) fare = Math.floor(fare / 2 / 10) * 10;
-      out.push({ company: (u.type || '特急') + '料金', dist: 0, fare });
+      out.push({ company: (u.type || '特急') + '料金' + suffix, dist: 0, fare,
+                 seat: nonres ? SEAT_NONRESERVED : SEAT_RESERVED, seatOptional: delta != null });
     }
   });
   return out;
@@ -857,7 +891,11 @@ function premiumYen(ex, group, type, km) {
   return 0;
 }
 
-function journeyFare(journey) {
+// opts.seat: 'reserved'(既定) | 'nonreserved'。乗車券部分は席種で変わらないので、
+// 席種の効くのは特急料金だけ。戻り値の seatFares は「自由席を選べる列車を含む場合のみ」
+// {reserved, nonreserved} が入る(全車指定席だけの経路や特急なしの経路では null)。
+function journeyFare(journey, opts) {
+  const seat = (opts && opts.seat) === SEAT_NONRESERVED ? SEAT_NONRESERVED : SEAT_RESERVED;
   // レグ→会社分割パーツ→隣接同グループをマージして運賃合算。
   // バスレグは fares.json(鉄道の営業キロ制)の対象外なので運賃計算から外し、
   // 本数だけ返す(UIは「バス運賃別途」と出す)。
@@ -916,10 +954,21 @@ function journeyFare(journey) {
     }
   }
   // 特急料金(乗車券への加算)
-  for (const e of expressFares(journey)) {
+  const exFares = expressFares(journey, seat);
+  for (const e of exFares) {
     total += e.fare; breakdown.push(e);
   }
-  return { total, breakdown, busLegs };
+  // 席種を選べる列車が1本でもあれば、両方の総額を出して UI に選ばせる。
+  let seatFares = null;
+  if (exFares.some(e => e.seatOptional)) {
+    const sum = arr => arr.reduce((a, b) => a + b.fare, 0);
+    const ticket = total - sum(exFares);
+    seatFares = {
+      reserved: ticket + sum(seat === SEAT_RESERVED ? exFares : expressFares(journey, SEAT_RESERVED)),
+      nonreserved: ticket + sum(seat === SEAT_NONRESERVED ? exFares : expressFares(journey, SEAT_NONRESERVED)),
+    };
+  }
+  return { total, breakdown, busLegs, seat, seatFares };
 }
 
 function journeyKm(journey) {
@@ -1017,7 +1066,7 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   // 運賃不明の経路は基準にも入れず、従来どおり固定ペナルティで扱う。
   function fareOf(j) {
     let f;
-    try { f = journeyFare(j); } catch (e) { return null; }
+    try { f = journeyFare(j, { seat: opts.seat }); } catch (e) { return null; }
     if (!f || f.busLegs) return null;
     return (Number.isFinite(f.total) && f.total > 0) ? f.total : null;
   }

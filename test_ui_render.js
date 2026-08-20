@@ -7,7 +7,11 @@ const el = () => new Proxy({ style: {}, dataset: {}, classList: { add(){}, remov
   get(t, k) { return k in t ? t[k] : ''; }, set(t, k, v) { t[k] = v; return true; } });
 global.addEventListener = () => {};
 global.window = global;
-global.document = { getElementById: el, querySelector: () => null, querySelectorAll: () => [],
+// getElementById は id ごとに同じ要素を返す(毎回新しいProxyだと <select> の値が
+// 保持されず、座席種別のように「書いて読み直す」UI状態をテストできない)
+const elById = new Map();
+const byId = id => { if (!elById.has(id)) elById.set(id, el()); return elById.get(id); };
+global.document = { getElementById: byId, querySelector: () => null, querySelectorAll: () => [],
   addEventListener(){}, createElement: el, body: el() };
 global.localStorage = { getItem: () => null, setItem(){} };
 global.location = { search: '' };
@@ -20,6 +24,7 @@ const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
   '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, ' +
   'overnightHint, setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
+  'setSeat, currentSeat, ' +
   'showDropdown, hideDropdown, AC_GAP, ' +
   'setGraph: g => { graph = g; } };';
 vm.runInThisContext(src, { filename: 'index.html:inline' });
@@ -82,6 +87,47 @@ t('中距離(東京→博多)では宿泊ヒントを出さない',
   __ui.overnightHint(rid('東京'), rid('博多')) === '');
 t('近距離(志布志→都城)では宿泊ヒントを出さない',
   __ui.overnightHint(rid('志布志'), rid('都城')) === '');
+
+// --- 指定席/自由席 ---
+// 新幹線カードは席種と、もう一方の席種の総額(差額つき)を出す。全車指定席の列車
+// (はやぶさ/あずさ等)は選択の余地が無いので席種を出さない。
+const findByType = (from, to, hint) => {
+  for (const at of [480, 540, 600, 660]) {
+    for (const cand of RouterV3.findJourneys(rid(from), rid(to), at, { day: 0 })) {
+      if (cand.legs.some(l => l.kind === 'ride' && (l.type || '').includes(hint))) return cand;
+    }
+  }
+  return null;
+};
+const jn = findByType('東京', '新大阪', 'のぞみ');
+t('のぞみ経路が見つかる', !!jn);
+t('初期状態は指定席', __ui.currentSeat() === 'reserved');
+const hnR = __ui.renderOneRoute(jn, 0);
+const fnR = RouterV3.journeyFare(jn, { seat: 'reserved' });
+const fnN = RouterV3.journeyFare(jn, { seat: 'nonreserved' });
+t('指定席カードに「うち特急料金 …(指定席)」が出る', /うち特急料金 ¥[\d,]+\(指定席\)/.test(hnR));
+t('指定席カードに自由席の総額と差額が出る',
+  hnR.includes('自由席 ¥' + fnN.total.toLocaleString()) &&
+  hnR.includes('(' + (fnN.total - fnR.total).toLocaleString() + ')'),
+  `自由席¥${fnN.total} 差${fnN.total - fnR.total}`);
+t('自由席は指定席より安い', fnN.total < fnR.total, `${fnR.total} → ${fnN.total}`);
+
+__ui.setSeat('nonreserved');
+t('setSeat で自由席に切り替わる', __ui.currentSeat() === 'nonreserved');
+const hnN = __ui.renderOneRoute(jn, 0);
+t('自由席カードの総額が自由席運賃になる', hnN.includes('¥' + fnN.total.toLocaleString()));
+t('自由席カードに「うち特急料金 …(自由席)」が出る', /うち特急料金 ¥[\d,]+\(自由席\)/.test(hnN));
+t('自由席カードから指定席に戻すリンクが出る', hnN.includes('指定席 ¥' + fnR.total.toLocaleString()));
+__ui.setSeat('reserved');
+
+// 全車指定席: はやぶさは自由席が無いので席種の表示も切替リンクも出さない
+const jh = findByType('東京', '仙台', 'はやぶさ');
+t('はやぶさ経路が見つかる', !!jh);
+const hh = __ui.renderOneRoute(jh, 0);
+t('全車指定席の経路は「うち特急料金」に席種を付けない',
+  /うち特急料金 ¥[\d,]+</.test(hh) && !hh.includes('(指定席)') && !hh.includes('(自由席)'));
+t('全車指定席の経路に席種の切替リンクが出ない', !/自由席 ¥/.test(hh));
+t('席種カードに undefined が無い', !/undefined/.test(hnR) && !/undefined/.test(hh));
 
 // --- バス限定モード ---
 const jb = RouterV3.findJourneys(rid('渋谷'), rid('六本木'), 600, { day: 0, busOnly: true })[0];

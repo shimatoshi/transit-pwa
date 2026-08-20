@@ -50,7 +50,7 @@ for (const [f, t, exp, hint] of ANCHORS) {
   }
   if (!chosen) { console.log(`${f}→${t}: ${hint}経路なし`); continue; }
   const fr = R.journeyFare(chosen);
-  const exFare = fr.breakdown.filter(b => /料金$/.test(b.company)).reduce((a, b) => a + b.fare, 0);
+  const exFare = fr.breakdown.filter(b => /料金/.test(b.company)).reduce((a, b) => a + b.fare, 0);
   const diff = exFare - exp;
   const mark = Math.abs(diff) <= 300 ? 'OK ' : '×× ';
   console.log(`${mark}${f}→${t}  特急料金 期待${exp} 算${exFare} 差${diff >= 0 ? '+' : ''}${diff}  総額¥${fr.total}  [${hint}]`);
