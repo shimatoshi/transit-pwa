@@ -200,6 +200,22 @@ body {
   cursor: pointer;
 }
 .opt-toggles input { accent-color: var(--blue); }
+/* 交通手段(すべて/鉄道のみ/バスのみ)。ソートバーと同じセグメント型に揃える */
+.mode-toggles { display: flex; gap: 6px; padding: 0 12px 8px; }
+.mode-btn {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.mode-btn.on { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
+.mode-btn.on[data-mode="bus"] { background: #2e7d32; border-color: #2e7d32; }
+/* バス限定では特急/新幹線トグルが効かないので触れないようにする */
+.opt-toggles.dim { opacity: .4; pointer-events: none; }
 .search-btn {
   width: 100%;
   padding: 13px;
@@ -416,10 +432,14 @@ body {
     <button class="add-via-btn" onclick="addVia()">+ 経由駅</button>
     <button class="swap-btn" onclick="swapDepArr()">入替</button>
   </div>
-  <div class="opt-toggles">
+  <div class="mode-toggles" id="mode-toggles">
+    <button type="button" class="mode-btn on" data-mode="all" onclick="setTravelMode('all')">すべて</button>
+    <button type="button" class="mode-btn" data-mode="rail" onclick="setTravelMode('rail')">&#128649; 鉄道のみ</button>
+    <button type="button" class="mode-btn" data-mode="bus" onclick="setTravelMode('bus')">&#128652; バスのみ</button>
+  </div>
+  <div class="opt-toggles" id="opt-toggles">
     <label><input type="checkbox" id="opt-express" checked onchange="saveOpts()"> 特急を使う</label>
     <label><input type="checkbox" id="opt-shinkansen" checked onchange="saveOpts()"> 新幹線を使う</label>
-    <label><input type="checkbox" id="opt-bus" checked onchange="saveOpts()"> バスを使う</label>
   </div>
   <button class="search-btn" id="search-btn" onclick="doSearch()" disabled>検索</button>
 </div>
@@ -435,7 +455,7 @@ body {
 <!-- 出典表示。CC BY 系のデータは表示が義務なので trains_v3_meta.json の sources から生成する -->
 <div class="credits" id="credits"></div>
 
-<script src="router_v3.js?v=10"></script>
+<script src="router_v3.js?v=11"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -568,8 +588,9 @@ function searchStations(query) {
     if (b.name === query && a.name !== query) return 1;
     if (a.name.startsWith(query) && !b.name.startsWith(query)) return -1;
     if (b.name.startsWith(query) && !a.name.startsWith(query)) return 1;
-    // 同じ関連度なら鉄道駅を上に。バス停は数が多く、駅名サジェストを汚しやすい
-    if (a.mode !== b.mode) return a.mode - b.mode;
+    // 同じ関連度なら鉄道駅を上に。バス停は数が多く、駅名サジェストを汚しやすい。
+    // バス限定モードのときは探しているのが停留所なので順序を反転する
+    if (a.mode !== b.mode) return travelMode === 'bus' ? b.mode - a.mode : a.mode - b.mode;
     return a.name.length - b.name.length;
   });
   return results.slice(0, 12);
@@ -695,11 +716,30 @@ function findAllByName(name) {
 }
 
 // === Search ===
+// 交通手段モード: all=すべて / rail=鉄道のみ(バス除外) / bus=バスのみ(バス限定の経路案内)
+let travelMode = 'all';
+const TRAVEL_MODES = ['all', 'rail', 'bus'];
+function setTravelMode(mode) {
+  if (TRAVEL_MODES.indexOf(mode) < 0) mode = 'all';
+  travelMode = mode;
+  const btns = document.querySelectorAll('.mode-btn');
+  for (const b of btns) {
+    if (b.dataset.mode === mode) b.classList.add('on');
+    else b.classList.remove('on');
+  }
+  // 特急/新幹線は鉄道の設定なので、バス限定のときは無効に見せる
+  const ot = document.getElementById('opt-toggles');
+  if (ot && ot.classList) {
+    if (mode === 'bus') ot.classList.add('dim');
+    else ot.classList.remove('dim');
+  }
+  saveOpts();
+}
 function saveOpts() {
   localStorage.setItem('routeOpts', JSON.stringify({
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
-    bus: document.getElementById('opt-bus').checked,
+    mode: travelMode,
   }));
 }
 (function restoreOpts() {
@@ -707,7 +747,9 @@ function saveOpts() {
     const o = JSON.parse(localStorage.getItem('routeOpts') || '{}');
     if (o.express === false) document.getElementById('opt-express').checked = false;
     if (o.shinkansen === false) document.getElementById('opt-shinkansen').checked = false;
-    if (o.bus === false) document.getElementById('opt-bus').checked = false;
+    // mode 導入前の保存値(bus:false = バスを使わない)からの移行
+    const mode = o.mode || (o.bus === false ? 'rail' : null);
+    if (mode) setTravelMode(mode);
   } catch (e) {}
 })();
 
@@ -734,6 +776,9 @@ function applyUrlParams() {
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
     const di = document.getElementById('date-input'); if (di) di.value = d;
   }
+  // ?mode=bus でバス限定の案内に直行できる(map-app の「バスで行く」導線用)
+  const mode = (p.get('mode') || '').trim();
+  if (TRAVEL_MODES.indexOf(mode) >= 0) setTravelMode(mode);
   if (from && to) setTimeout(doSearch, 0);
 }
 
@@ -785,7 +830,8 @@ function doSearch() {
   const opts = {
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
-    noBus: !document.getElementById('opt-bus').checked,
+    noBus: travelMode === 'rail',    // 鉄道のみ
+    busOnly: travelMode === 'bus',   // バス限定
     day: getDayType(),               // 運転日フィルタ(0平日/1土/2休)
   };
   lastSearchOpts = opts;             // 前の便/次の便で再利用
@@ -843,8 +889,11 @@ function doSearch() {
     if (!journeys.length) {
       const fn = graph.stations[waypointCandidates[0][0]].n;
       const tn = graph.stations[waypointCandidates[1][0]].n;
-      // 特急/新幹線OFFだと長距離は各停のみで日を跨ぎ探索不能になる→ヒント
-      const offHint = (!opts.express || !opts.shinkansen)
+      // 特急/新幹線OFFだと長距離は各停のみで日を跨ぎ探索不能になる→ヒント。
+      // バス限定は「そもそも収録範囲外」が最も多いので、そちらのヒントを優先する。
+      const offHint = opts.busOnly
+        ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">バスのみで検索しています。収録しているのは都営バスだけなので、営業エリア(東京23区と多摩の一部)の外や、駅から停留所への徒歩連絡が無い場所では経路が出ません。「すべて」に戻してお試しください。</div>`
+        : (!opts.express || !opts.shinkansen)
         ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">特急・新幹線をOFFにしています。長距離は各駅停車のみだと日付をまたぐため経路が出ないことがあります。トグルをONにしてお試しください。</div>`
         : '';
       document.getElementById('results').innerHTML =
@@ -937,12 +986,17 @@ function renderOneRoute(j, index) {
       <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${j.transfers > 0 ? j.transfers + '回乗換' : '直通'} / ${km.toFixed(1)}km${nBusRides ? ` / <span style="color:${BUS_COLOR};font-weight:600">&#128652; バス${nBusRides}回</span>` : ''}</div>
     </div>
     <div style="text-align:right">
-      <div style="font-size:18px;font-weight:700;color:var(--text)">¥${fare.total.toLocaleString()}</div>
+      <div style="font-size:18px;font-weight:700;color:var(--text)">${
+        // 全区間バスだと鉄道運賃の合計が0円になる。「¥0」は誤解を招くので出さない
+        fare.total > 0 || !nBusRides
+          ? `¥${fare.total.toLocaleString()}`
+          : `<span style="font-size:13px;color:var(--muted)">運賃別途</span>`
+      }</div>
       ${(() => {
         const ex = fare.breakdown.filter(b => /料金$/.test(b.company)).reduce((a, b) => a + b.fare, 0);
         return ex > 0 ? `<div style="font-size:11px;color:var(--muted)">うち特急料金 ¥${ex.toLocaleString()}</div>` : '';
       })()}
-      ${nBusRides ? `<div style="font-size:11px;color:var(--orange)">バス運賃別途</div>` : ''}
+      ${nBusRides && fare.total > 0 ? `<div style="font-size:11px;color:var(--orange)">バス運賃別途</div>` : ''}
     </div>
   </div>`;
 
@@ -1052,8 +1106,9 @@ function firstLastBlockHtml() {
   if (!firstLastSrcDst) return '';
   const [src, dst] = firstLastSrcDst;
   const parts = [];
+  const lastLabel = lastSearchOpts.busOnly ? '終バス' : '終電';
   if (first) parts.push(`始発 ${formatTime(first.dep)}発`);
-  if (last) parts.push(`終電 ${formatTime(last.dep)}発`);
+  if (last) parts.push(`${lastLabel} ${formatTime(last.dep)}発`);
   return `<div style="margin:8px 16px;padding:8px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--muted)">
     ${graph.stations[src].n} → ${graph.stations[dst].n}: ${parts.join(' / ')} <span style="opacity:.75">(目安)</span>
   </div>`;

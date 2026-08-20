@@ -73,10 +73,12 @@ const D = {
   foot: null,       // station -> [[to, walkMin], ...]
   fares: null,
   tripPaid: null, tripShink: null, // Uint8 per trip
+  busConn: null,    // バス限定検索用のconn添字(遅延生成)
 };
 
 function loadBinary(arrayBuffer, meta, stations, fares) {
   D.stations = stations;
+  D.busConn = null;   // データを差し替えたら遅延生成キャッシュを捨てる
   D.fares = fares || null;
   D.lines = meta.lines;
   D.types = meta.types;
@@ -215,6 +217,31 @@ function firstConnAfter(t) {
   return lo;
 }
 
+// バス限定検索用のconnection添字(depT昇順を保つ)。全connの3/4は鉄道なので、
+// 毎回それを読み飛ばすより添字配列を1本作って舐めるほうが速い。初回検索時に遅延生成。
+function busConnIndex() {
+  if (D.busConn) return D.busConn;
+  const mode = D.tripMode;
+  let n = 0;
+  for (let c = 0; c < D.nConn; c++) if (mode[D.cTrip[c]] === 1) n++;
+  const idx = new Int32Array(n);
+  let k = 0;
+  for (let c = 0; c < D.nConn; c++) if (mode[D.cTrip[c]] === 1) idx[k++] = c;
+  D.busConn = idx;
+  return idx;
+}
+
+// 添字配列 idx(D.cDepT昇順) の中で cDepT >= t になる最初の位置
+function firstIdxAfter(idx, t) {
+  let lo = 0, hi = idx.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (D.cDepT[idx[mid]] < t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 // CSA earliest-arrival。返値: journey or null
 function query(srcIdx, dstIdx, depMin, opts) {
   opts = opts || {};
@@ -224,8 +251,11 @@ function query(srcIdx, dstIdx, depMin, opts) {
   const banLines = opts.banLines || null; // Set of line names (経路多様化用)
   // 運転日フィルタ: opts.day = 0平日/1土曜/2休日。該当日に走る列車のみ。
   const dayMask = (opts.day != null && D.tripCal) ? (1 << opts.day) : 0;
-  const noBus = !!opts.noBus && !!D.tripMode;   // バスを使わない
   const mode = D.tripMode;
+  // busOnly はバス限定(鉄道を全部落とす)。noBus と同時指定は「バスも鉄道も無し」に
+  // なって必ず経路なしになるので、意図が明確な busOnly を優先する。
+  const busOnly = !!opts.busOnly && !!mode;
+  const noBus = !busOnly && !!opts.noBus && !!mode;   // バスを使わない
 
   const ns = D.stations.length;
   const arr = new Int32Array(ns).fill(INF);
@@ -241,7 +271,13 @@ function query(srcIdx, dstIdx, depMin, opts) {
     }
   }
 
-  for (let c = firstConnAfter(depMin); c < D.nConn; c++) {
+  // バス限定時はバスconnだけを並べた添字配列を走査する(鉄道connを読み飛ばさない)
+  const scan = busOnly ? busConnIndex() : null;
+  const nScan = scan ? scan.length : D.nConn;
+  const c0 = scan ? firstIdxAfter(scan, depMin) : firstConnAfter(depMin);
+
+  for (let ci = c0; ci < nScan; ci++) {
+    const c = scan ? scan[ci] : ci;
     const dT = D.cDepT[c];
     if (dT > arr[dstIdx]) break; // これ以降は改善不可
     const trip = D.cTrip[c];
