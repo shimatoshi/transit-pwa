@@ -76,7 +76,135 @@ const D = {
   busConn: null,    // バス限定検索用のconn添字(遅延生成)
 };
 
-function loadBinary(arrayBuffer, meta, stations, fares) {
+// trains_v3.bin の展開 → connection配列の構築。
+//
+// 起動時間のほぼ全部がここに集中していたので、meta本体に依存しない形に切り出してある。
+// 必要なのは trip→路線添字 (tripLine) と trip→鉄道/バス (tripMode) と駅数だけなので、
+// この関数は Worker 上でも動く。返り値の TypedArray は全て独立したバッファで、
+// そのまま postMessage の transfer リストに載せられる (data_worker.js が使う)。
+//
+// 速度上の要点:
+//   * depT昇順の並べ替えを Array.from(2.7M要素) + comparator sort から計数ソートに変えた。
+//     depT は「分」の小さい整数なのでバケット法が使える。バケット内は生成順のままなので
+//     安定ソートと結果が1要素も変わらない (旧実装の Array#sort も ES2019以降は安定)。
+//   * 並べ替え後の並び替えコピーを廃止し、最初から確定位置へ書き込む。
+//     中間バッファ(約55MB)と添字配列(約22MB)を丸ごと作らずに済む。
+//   * 個数の数え上げは1パスに統合した (旧実装は n と extra で全走査を2回していた)。
+function buildConnections(arrayBuffer, opts) {
+  const tripLine = opts.tripLine;
+  const tripMode = opts.tripMode || null;
+  const NS = opts.nStations;
+  if (NS * NS > Number.MAX_SAFE_INTEGER) throw new Error('駅数が多すぎてedgeDomのキーが壊れる');
+
+  const dv = new DataView(arrayBuffer);
+  if (dv.getUint8(0) !== 0x54 || dv.getUint8(1) !== 0x56 || dv.getUint8(2) !== 0x33) {
+    throw new Error('bad trains_v3.bin magic');
+  }
+  const ntrips = dv.getUint32(4, true);
+  const nstops = dv.getUint32(8, true);
+  let off = 12;
+  const align4 = x => (x + 3) & ~3;
+  const srcOff = new Uint32Array(arrayBuffer, off, ntrips + 1);
+  off = align4(off + (ntrips + 1) * 4);
+  const rawS = new Uint16Array(arrayBuffer, off, nstops); off = align4(off + nstops * 2);
+  const rawA = new Uint16Array(arrayBuffer, off, nstops); off = align4(off + nstops * 2);
+  const rawD = new Uint16Array(arrayBuffer, off, nstops); off = align4(off + nstops * 2);
+
+  // 保持し続けるものは arrayBuffer を手放せるよう独立バッファへ複製する
+  // (Worker から transfer したあと、17MB の元バッファをGCに返せるようにするため)
+  const tripOff = new Uint32Array(srcOff);
+  const stS = new Uint16Array(rawS);
+
+  // 時刻正規化: trip内で時刻が戻ったら日跨ぎ(+1440)。65535=なし
+  const A = new Int32Array(nstops), Dp = new Int32Array(nstops);
+  let maxDep = 0;
+  for (let t = 0; t < ntrips; t++) {
+    let base = 0, prev = -1;
+    for (let i = tripOff[t]; i < tripOff[t + 1]; i++) {
+      let a = rawA[i] === 65535 ? -1 : rawA[i] + base;
+      if (a >= 0 && prev >= 0 && a < prev) { base += 1440; a += 1440; }
+      if (a >= 0) prev = a;
+      let d = rawD[i] === 65535 ? -1 : rawD[i] + base;
+      if (d >= 0 && prev >= 0 && d < prev) { base += 1440; d += 1440; }
+      if (d >= 0) prev = d;
+      A[i] = a; Dp[i] = d;
+      if (d > maxDep) maxDep = d;
+    }
+  }
+
+  // --- パス1: depT のヒストグラム。深夜跨ぎ用の複製(dep<360 を +1440)も同時に数える
+  const NBUCKET = maxDep + 1440 + 2;
+  const bucket = new Int32Array(NBUCKET + 1);
+  let total = 0;
+  for (let t = 0; t < ntrips; t++) {
+    for (let i = tripOff[t]; i < tripOff[t + 1] - 1; i++) {
+      const d = Dp[i];
+      if (d >= 0 && (A[i + 1] >= 0 || Dp[i + 1] >= 0)) {
+        bucket[d]++; total++;
+        if (d < 360) { bucket[d + 1440]++; total++; }
+      }
+    }
+  }
+  // 累積和 → 各depTの書き込み開始位置
+  let acc = 0;
+  for (let b = 0; b < NBUCKET; b++) { const c = bucket[b]; bucket[b] = acc; acc += c; }
+  bucket[NBUCKET] = acc;
+
+  // --- パス2: 確定位置へ直接書き込む (= depT昇順、同時刻内は生成順)
+  const cDepS = new Uint16Array(total), cArrS = new Uint16Array(total);
+  const cDepT = new Int32Array(total), cArrT = new Int32Array(total);
+  const cTrip = new Int32Array(total), cStopI = new Int32Array(total);
+
+  // エッジ(駅間)ごとの路線多数決マップ。直通列車は1本の路線ラベルが全区間に付くため
+  // (例:内房線快速が横浜→逗子の横須賀線区間も内房線表記)、区間ごとに最も多く走る路線で
+  // 表示を訂正する。専用線の列車が直通より多数なので多数決で正しい路線が選ばれる。
+  const edgeCount = new Map();   // dep*NS+arr -> Map(lineIdx->count)
+  for (let t = 0; t < ntrips; t++) {
+    const li = tripLine[t];
+    // バスは直通の誤ラベルが無いので多数決は不要。全国投入時に数十万エントリを
+    // 積むだけの純コストになるのでスキップする
+    const isBus = tripMode ? tripMode[t] === 1 : false;
+    for (let i = tripOff[t]; i < tripOff[t + 1] - 1; i++) {
+      const d = Dp[i];
+      if (d < 0 || (A[i + 1] < 0 && Dp[i + 1] < 0)) continue;
+      const arr = A[i + 1] >= 0 ? A[i + 1] : Dp[i + 1];
+      const ds = stS[i], as = stS[i + 1];
+      let k = bucket[d]++;
+      cDepS[k] = ds; cArrS[k] = as; cDepT[k] = d; cArrT[k] = arr; cTrip[k] = t; cStopI[k] = i;
+      if (d < 360) {
+        k = bucket[d + 1440]++;
+        cDepS[k] = ds; cArrS[k] = as; cDepT[k] = d + 1440; cArrT[k] = arr + 1440;
+        cTrip[k] = t; cStopI[k] = i;
+      }
+      if (isBus) continue;
+      const ek = ds * NS + as;
+      let lm = edgeCount.get(ek);
+      if (!lm) { lm = new Map(); edgeCount.set(ek, lm); }
+      lm.set(li, (lm.get(li) || 0) + 1);
+    }
+  }
+
+  // edgeDom は数万件程度。Map のままだと transfer できないので配列で返す。
+  const edgeKey = new Float64Array(edgeCount.size);
+  const edgeLine = new Int32Array(edgeCount.size);
+  let e = 0;
+  for (const [ek, lm] of edgeCount) {
+    let best = -1, bc = -1;
+    for (const [li, c] of lm) if (c > bc) { bc = c; best = li; }
+    edgeKey[e] = ek; edgeLine[e] = best; e++;
+  }
+
+  return {
+    ntrips, nstops, nConn: total,
+    tripOff, stS, stA: A, stD: Dp,
+    cDepS, cArrS, cDepT, cArrT, cTrip, cStopI,
+    edgeKey, edgeLine,
+  };
+}
+
+// buildConnections の結果は transfer で受け取れるので、その中身はコピーせずそのまま使う。
+// ここに残るのは meta を突き合わせる軽い処理だけ (数十ms)。
+function adoptBuild(built, meta, stations, fares) {
   D.stations = stations;
   D.busConn = null;   // データを差し替えたら遅延生成キャッシュを捨てる
   D.fares = fares || null;
@@ -89,38 +217,18 @@ function loadBinary(arrayBuffer, meta, stations, fares) {
   D.tripMode = meta.trips.m || null;  // 0=鉄道 1=バス。無ければ全て鉄道扱い(後方互換)
   D.sources = meta.sources || null;   // バス等の出典表示(CC BY の表示義務)
 
-  const dv = new DataView(arrayBuffer);
-  if (dv.getUint8(0) !== 0x54 || dv.getUint8(1) !== 0x56 || dv.getUint8(2) !== 0x33) {
-    throw new Error('bad trains_v3.bin magic');
-  }
-  const ntrips = dv.getUint32(4, true);
-  const nstops = dv.getUint32(8, true);
-  let off = 12;
-  const align4 = x => (x + 3) & ~3;
-  D.tripOff = new Uint32Array(arrayBuffer, off, ntrips + 1);
-  off = align4(off + (ntrips + 1) * 4);
-  const rawS = new Uint16Array(arrayBuffer, off, nstops); off = align4(off + nstops * 2);
-  const rawA = new Uint16Array(arrayBuffer, off, nstops); off = align4(off + nstops * 2);
-  const rawD = new Uint16Array(arrayBuffer, off, nstops); off = align4(off + nstops * 2);
+  D.tripOff = built.tripOff;
+  D.stS = built.stS; D.stA = built.stA; D.stD = built.stD;
+  D.cDepS = built.cDepS; D.cArrS = built.cArrS;
+  D.cDepT = built.cDepT; D.cArrT = built.cArrT;
+  D.cTrip = built.cTrip; D.cStopI = built.cStopI;
+  D.nConn = built.nConn;
 
-  // 時刻正規化: trip内で時刻が戻ったら日跨ぎ(+1440)。65535=なし
-  D.stS = rawS;
-  const A = new Int32Array(nstops), Dp = new Int32Array(nstops);
-  for (let t = 0; t < ntrips; t++) {
-    let base = 0, prev = -1;
-    for (let i = D.tripOff[t]; i < D.tripOff[t + 1]; i++) {
-      let a = rawA[i] === 65535 ? -1 : rawA[i] + base;
-      if (a >= 0 && prev >= 0 && a < prev) { base += 1440; a += 1440; }
-      if (a >= 0) prev = a;
-      let d = rawD[i] === 65535 ? -1 : rawD[i] + base;
-      if (d >= 0 && prev >= 0 && d < prev) { base += 1440; d += 1440; }
-      if (d >= 0) prev = d;
-      A[i] = a; Dp[i] = d;
-    }
-  }
-  D.stA = A; D.stD = Dp;
+  D.edgeDom = new Map();         // dep*NS+arr -> 最多路線lineIdx
+  for (let i = 0; i < built.edgeLine.length; i++) D.edgeDom.set(built.edgeKey[i], built.edgeLine[i]);
 
   // trip属性 (有料特急/新幹線)
+  const ntrips = built.ntrips;
   const paid = new Uint8Array(ntrips), shink = new Uint8Array(ntrips);
   for (let t = 0; t < ntrips; t++) {
     const line = D.lines[D.tripLine[t]] || '';
@@ -131,80 +239,22 @@ function loadBinary(arrayBuffer, meta, stations, fares) {
   }
   D.tripPaid = paid; D.tripShink = shink;
 
-  // connections 構築: trip内の連続停車ペア
-  let n = 0;
-  for (let t = 0; t < ntrips; t++) {
-    for (let i = D.tripOff[t]; i < D.tripOff[t + 1] - 1; i++) {
-      if (Dp[i] >= 0 && (A[i + 1] >= 0 || Dp[i + 1] >= 0)) n++;
-    }
-  }
-  // 深夜跨ぎ検索用に dep<360 のconnを+1440で複製
-  let extra = 0;
-  for (let t = 0; t < ntrips; t++) {
-    for (let i = D.tripOff[t]; i < D.tripOff[t + 1] - 1; i++) {
-      if (Dp[i] >= 0 && Dp[i] < 360 && (A[i + 1] >= 0 || Dp[i + 1] >= 0)) extra++;
-    }
-  }
-  const total = n + extra;
-  const cDepS = new Uint16Array(total), cArrS = new Uint16Array(total);
-  const cDepT = new Int32Array(total), cArrT = new Int32Array(total);
-  const cTrip = new Int32Array(total), cStopI = new Int32Array(total);
-  let k = 0;
-  function emit(t, i, shift) {
-    const arr = A[i + 1] >= 0 ? A[i + 1] : Dp[i + 1];
-    cDepS[k] = D.stS[i]; cArrS[k] = D.stS[i + 1];
-    cDepT[k] = Dp[i] + shift; cArrT[k] = arr + shift;
-    cTrip[k] = t; cStopI[k] = i; k++;
-  }
-  // エッジ(駅間)ごとの路線多数決マップ。直通列車は1本の路線ラベルが全区間に付くため
-  // (例:内房線快速が横浜→逗子の横須賀線区間も内房線表記)、区間ごとに最も多く走る路線で
-  // 表示を訂正する。専用線の列車が直通より多数なので多数決で正しい路線が選ばれる。
-  const NS = D.stations.length;
-  if (NS * NS > Number.MAX_SAFE_INTEGER) throw new Error('駅数が多すぎてedgeDomのキーが壊れる');
-  const edgeCount = new Map();   // dep*NS+arr -> Map(lineIdx->count)
-  for (let t = 0; t < ntrips; t++) {
-    const li = D.tripLine[t];
-    // バスは直通の誤ラベルが無いので多数決は不要。全国投入時に数十万エントリを
-    // 積むだけの純コストになるのでスキップする
-    const isBus = D.tripMode ? D.tripMode[t] === 1 : false;
-    for (let i = D.tripOff[t]; i < D.tripOff[t + 1] - 1; i++) {
-      if (Dp[i] >= 0 && (A[i + 1] >= 0 || Dp[i + 1] >= 0)) {
-        emit(t, i, 0);
-        if (Dp[i] < 360) emit(t, i, 1440);
-        if (isBus) continue;
-        const ek = D.stS[i] * NS + D.stS[i + 1];
-        let lm = edgeCount.get(ek);
-        if (!lm) { lm = new Map(); edgeCount.set(ek, lm); }
-        lm.set(li, (lm.get(li) || 0) + 1);
-      }
-    }
-  }
-  D.edgeDom = new Map();         // dep*NS+arr -> 最多路線lineIdx
-  for (const [ek, lm] of edgeCount) {
-    let best = -1, bc = -1;
-    for (const [li, c] of lm) if (c > bc) { bc = c; best = li; }
-    D.edgeDom.set(ek, best);
-  }
-  // depT昇順ソート (index sort)
-  const idx = Array.from({ length: total }, (_, x) => x);
-  idx.sort((a, b) => cDepT[a] - cDepT[b]);
-  D.cDepS = new Uint16Array(total); D.cArrS = new Uint16Array(total);
-  D.cDepT = new Int32Array(total); D.cArrT = new Int32Array(total);
-  D.cTrip = new Int32Array(total); D.cStopI = new Int32Array(total);
-  for (let x = 0; x < total; x++) {
-    const s = idx[x];
-    D.cDepS[x] = cDepS[s]; D.cArrS[x] = cArrS[s];
-    D.cDepT[x] = cDepT[s]; D.cArrT[x] = cArrT[s];
-    D.cTrip[x] = cTrip[s]; D.cStopI[x] = cStopI[s];
-  }
-  D.nConn = total;
-
   // footpaths
   D.foot = {};
   for (const [a, b, w] of meta.footpaths) {
     (D.foot[a] = D.foot[a] || []).push([b, w]);
     (D.foot[b] = D.foot[b] || []).push([a, w]);
   }
+}
+
+// 一発で読み込む従来API (node のテスト・スクリプト用。ブラウザは Worker 経由の
+// buildConnections + adoptBuild を使う)
+function loadBinary(arrayBuffer, meta, stations, fares) {
+  adoptBuild(buildConnections(arrayBuffer, {
+    tripLine: meta.trips.l,
+    tripMode: meta.trips.m || null,
+    nStations: stations.length,
+  }), meta, stations, fares);
 }
 
 function firstConnAfter(t) {
@@ -1131,6 +1181,8 @@ function timetable(stIdx, opts) {
 
 const RouterV3 = {
   loadBinary,
+  buildConnections,
+  adoptBuild,
   query,
   findJourneys,
   nextJourney,

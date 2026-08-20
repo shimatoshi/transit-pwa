@@ -12,14 +12,25 @@
 //     ネットワーク優先で無条件に cache.put すると、キャプティブポータルのログイン画面
 //     (200 OK + text/html) が graph_v2.json の中身として保存され、次のオフライン起動で
 //     JSON.parse が落ちる。これがユーザー報告の「データが飛ぶ」の正体。
-const VERSION = 'v41';
+//
+// そのうえで、初回起動を速くするための取り決めがもう1つある。
+//
+//  3. install で DATA をネットワークから取りに行かないこと。
+//     ページ自身が同じ11MBを取っている最中に install が同じURLを no-cache で叩くと、
+//     初回訪問だけ通信量が丸ごと2倍になり、細い回線ではページ側の取得まで遅くなる。
+//     install は SHELL(数十KB)だけ確保して即終わらせ、DATA はページが読み終わってから
+//     CACHE_URLS で拾う。そのときには同じURLがHTTPキャッシュ(vercel.json で immutable)に
+//     載っているので、実質ネットワークを使わずにコピーできる。
+//     その代わり「新キャッシュが揃うまで旧キャッシュを消さない」を activate で守る。
+const VERSION = 'v42';
 const CACHE_NAME = `transit-${VERSION}`;
 
 // アプリの外枠。これが無いと起動すらできない。
 const SHELL = [
   './',
   './index.html',
-  './router_v3.js?v=11',
+  './router_v3.js?v=12',
+  './data_worker.js?v=1',
   './manifest.json',
 ];
 
@@ -98,10 +109,21 @@ async function safePut(cache, request, response) {
   }
   // Content-Length があるなら実際に読めたバイト数と突き合わせる。
   // ヘッダだけ来て本文が短い、という切断パターンをここで捕まえる。
+  //
+  // ただし Content-Length は「転送された(=圧縮後の)バイト数」で、body.size は
+  // 展開後のバイト数。gzip/br で配られたものを単純比較すると必ず食い違うので、
+  // 正常なレスポンスを軒並み truncated 扱いして何ひとつキャッシュできなくなる。
+  // (vercel は text/json を自動で圧縮するので、圧縮を考慮しない実装では
+  //  install が毎回失敗し、オフライン対応が事実上死ぬ)
+  // 圧縮がかかっているときは「宣言より短い」= 明らかな切断だけを弾く。
   const declared = response.headers.get('content-length');
-  if (declared && Number(declared) !== body.size) {
-    console.warn(`[sw] truncated response (${body.size}/${declared}):`, request.url);
-    return false;
+  if (declared) {
+    const n = Number(declared);
+    const encoded = !!response.headers.get('content-encoding');
+    if (encoded ? body.size < n : body.size !== n) {
+      console.warn(`[sw] truncated response (${body.size}/${declared}):`, request.url);
+      return false;
+    }
   }
   try {
     await cache.put(request, new Response(body, {
@@ -125,10 +147,15 @@ async function safePut(cache, request, response) {
 
 // 大きいファイルは1回の失敗で諦めない。addAll が「1つコケたら全滅」なのを避けるため、
 // 1件ずつ取得してリトライする。
-async function fetchAndStore(cache, url, attempts = 3) {
+//
+// cacheMode:
+//   'default'  ページが直前に取ったものをHTTPキャッシュから拾う (通信を増やさない)。
+//              実データURLは ?v= 付き＋immutable なので、内容が変われば別URLになる。
+//   'no-cache' 壊れたものを掴んでいる可能性があるとき用 (RECACHE)。必ずサーバに確認する。
+async function fetchAndStore(cache, url, { attempts = 3, cacheMode = 'default' } = {}) {
   for (let i = 0; i < attempts; i++) {
     try {
-      const req = new Request(url, { cache: 'no-cache' });
+      const req = new Request(url, { cache: cacheMode });
       const resp = await fetch(req);
       if (await safePut(cache, req, resp)) return true;
       if (quotaHit) return false; // 容量不足。何度やっても同じ
@@ -162,41 +189,65 @@ async function copyFromOldCache(cache, url) {
 }
 
 // ネットワーク → 旧キャッシュ の順で1件確保する。
-async function ensureCached(cache, url) {
+// network:false なら通信せず、旧世代からの引き継ぎだけを試す。
+async function ensureCached(cache, url, { network = true, cacheMode = 'default' } = {}) {
   if (await cache.match(url)) return true;
-  if (await fetchAndStore(cache, url)) return true;
+  if (network && await fetchAndStore(cache, url, { cacheMode })) return true;
   return copyFromOldCache(cache, url);
 }
 
-async function fillCache(cache, urls) {
-  const oks = await Promise.all(urls.map(u => ensureCached(cache, u)));
+async function fillCache(cache, urls, opts) {
+  const oks = await Promise.all(urls.map(u => ensureCached(cache, u, opts)));
   return urls.filter((_, i) => !oks[i]);
+}
+
+// 新キャッシュに必須アセットが全部揃っているか
+async function missingFrom(cache, urls) {
+  const found = await Promise.all(urls.map(u => cache.match(u)));
+  return urls.filter((_, i) => !found[i]);
+}
+
+// 旧世代のキャッシュを片付ける。
+// 「新キャッシュが必須アセットを全部持っている」ことが確認できたときだけ実行する。
+// ここを無条件にすると、?v= が上がった直後のオフライン起動で、まだ落とせていない新データと
+// 消してしまった旧データの両方が無い状態になる。
+async function cleanupOldCaches() {
+  const cache = await caches.open(CACHE_NAME);
+  const missing = await missingFrom(cache, REQUIRED);
+  if (missing.length) return missing;
+  const keys = await caches.keys();
+  await Promise.all(
+    keys.filter(k => k.startsWith('transit-') && k !== CACHE_NAME).map(k => caches.delete(k))
+  );
+  return [];
 }
 
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    const missing = await fillCache(cache, REQUIRED);
+    // シェルは必須。取れないなら更新を見送る (例外を投げれば activate は走らず、
+    // 旧キャッシュが消されないまま旧SWがオフライン動作を続けられる)。
+    const missing = await fillCache(cache, SHELL);
     if (missing.length) {
-      // ここで例外を投げると install が失敗し、activate は走らない。
-      // 結果として旧キャッシュが消されずに残り、旧SWがオフライン動作を続けられる。
-      // 中途半端な新キャッシュに切り替えて全滅させるより、更新を見送るほうが安全。
       throw new Error(`[sw] precache incomplete, aborting update: ${missing.join(', ')}`);
     }
-    await fillCache(cache, OPTIONAL); // 欠けても続行
+    // 実データはここでは取りに行かない (上の注意書き3)。旧世代からの引き継ぎだけ行う。
+    // オフライン中のSW更新で手持ちデータが消えないのは、この引き継ぎが担保している。
+    await fillCache(cache, DATA, { network: false });
+    await fillCache(cache, OPTIONAL, { network: false });
     await self.skipWaiting();
   })());
 });
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
-    // ここに到達した = install が完走した = 新キャッシュは必須アセットを全部持っている。
-    // この順序が保証されて初めて旧キャッシュを消してよい。
-    const keys = await caches.keys();
-    await Promise.all(
-      keys.filter(k => k.startsWith('transit-') && k !== CACHE_NAME).map(k => caches.delete(k))
-    );
+    // 新キャッシュが必須アセットを全部持っているときだけ旧世代を消す。
+    // 足りないときは残しておき、ページから CACHE_URLS が来て揃った時点で片付ける。
+    await cleanupOldCaches();
     await self.clients.claim();
+    // シェル以外の飾り物は、起動を邪魔しないようここで後追いする
+    const cache = await caches.open(CACHE_NAME);
+    await fillCache(cache, OPTIONAL);
   })());
 });
 
@@ -285,11 +336,17 @@ self.addEventListener('fetch', e => {
 
 // ---------------------------------------------------------------- メッセージ
 
-// ページ側から「実際に使っているURL」を送ってもらい、取りこぼしを埋める。
-// index.html の ?v= と上の DATA がズレても、オンラインで一度開けば自己修復する。
+// ページ側から「実際に使っているURL」を送ってもらい、オフライン用に保存する。
+//
+// これが実データの本来の保存経路。ページが読み終わってから走るので、同じURLは
+// もうHTTPキャッシュ(immutable)に載っていて、通信をほぼ増やさずにコピーできる。
+// index.html の ?v= と上の DATA がズレていても、ここで実URLが入るので自己修復もする。
 async function cacheUrls(urls) {
   const cache = await caches.open(CACHE_NAME);
-  return fillCache(cache, urls);
+  const missing = await fillCache(cache, urls);
+  // 揃ったなら、activate で残しておいた旧世代をここで片付ける
+  await cleanupOldCaches();
+  return missing;
 }
 
 self.addEventListener('message', e => {
@@ -302,11 +359,12 @@ self.addEventListener('message', e => {
   }
   if (msg.type === 'RECACHE') {
     // 復旧用。壊れたエントリを捨てて必須アセットを取り直す。
+    // ここだけはHTTPキャッシュも信用しない (壊れたものが載っている可能性がある)。
     e.waitUntil((async () => {
       const cache = await caches.open(CACHE_NAME);
       const targets = [...REQUIRED, ...(msg.urls || [])];
       for (const u of targets) await cache.delete(u);
-      const missing = await fillCache(cache, targets);
+      const missing = await fillCache(cache, targets, { cacheMode: 'no-cache' });
       const port = e.ports && e.ports[0];
       if (port) port.postMessage({ type: 'RECACHE_DONE', missing });
     })());
