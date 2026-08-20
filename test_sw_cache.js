@@ -217,7 +217,7 @@ async function copyCaches(from, to) {
   await copyCaches(good.caches, sw.caches);
   const name = (await sw.caches.keys())[0];
   const cache = await sw.caches.open(name);
-  const url = './router_v3.js?v=12';
+  const url = SW_SHELL.find(u => u.includes('router_v3'));
 
   const e = fetchEvt(new Request(abs(url)));
   sw.handlers.fetch(e);
@@ -262,7 +262,7 @@ async function copyCaches(from, to) {
     { status: 200, headers: { 'content-type': 'application/javascript', 'content-length': '9999' } }) });
   await copyCaches(good.caches, sw.caches);
   const cache = await sw.caches.open((await sw.caches.keys())[0]);
-  const url = './router_v3.js?v=12';
+  const url = SW_SHELL.find(u => u.includes('router_v3'));
   const before = await (await cache.match(url)).text();
 
   const e = fetchEvt(new Request(abs(url)));

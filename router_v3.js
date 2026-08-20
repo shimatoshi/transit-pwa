@@ -581,15 +581,20 @@ function jrCompanyByGeo(stops) {
 
 // 京阪神電車特定区間の座標ボックス(2025-04拡大後を内包する近似)。
 // 網干(東経134.5)〜野洲/草津(東経136.05)、和歌山(北緯34.2)〜京都/草津(北緯35.1)
+//
+// 判定は「全停車駅がボックス内」。重心で見ると、区間の一部が京阪神を通るだけの
+// 長距離(東京→博多は重心が神戸あたりに落ちる)まで電車特定区間の安いテーブルに
+// 化けてしまい、1175km の乗車券が ¥3,200 になっていた。電特は区間限定の特例なので、
+// 区間がエリアからはみ出したら通常の幹線テーブルに戻すのが正しい。
 function inKeihanshin(stops) {
-  let la = 0, lo = 0, n = 0;
+  let n = 0;
   for (const s of stops) {
     const st = D.stations[s.st];
-    if (st.la != null) { la += st.la; lo += st.lo; n++; }
+    if (st.la == null) continue;
+    n++;
+    if (!(st.la >= 34.2 && st.la <= 35.1 && st.lo >= 134.5 && st.lo <= 136.05)) return false;
   }
-  if (!n) return false;
-  la /= n; lo /= n;
-  return la >= 34.2 && la <= 35.1 && lo >= 134.5 && lo <= 136.05;
+  return n > 0;
 }
 
 // JR特定運賃(私鉄競合区間): セグメント端点の駅名ペアで照合(両順)
@@ -1191,6 +1196,7 @@ const RouterV3 = {
   journeyFare,
   journeyKm,
   legKm,
+  haversineKm,
   lineCompany,
   timetable,
   get data() { return D; },
