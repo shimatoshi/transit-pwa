@@ -19,15 +19,41 @@ const t0 = Date.now();
 R.loadBinary(ab, meta, graph.stations, fares);
 console.error(`[load ${Date.now() - t0}ms, ${R.data.nConn} connections]`);
 
-function idOf(name) {
+// index.html の findAllByName と同じ優先順位: 鉄道駅 > バス停、完全一致 > 括弧除去一致。
+// 素朴に「最初の完全一致」を返すと、都営バス停の「大曲」「大手町」が鉄道駅(大曲(秋田)/
+// 大手町(東京))を隠してしまい、CLIで駅名を打っても意図した駅を引けない。
+function idsOf(name) {
   const strip = s => s.replace(/[（(].*?[）)]/g, '');
+  const exact = [], loose = [];
   for (let i = 0; i < graph.stations.length; i++) {
-    if (graph.stations[i].n === name) return i;
+    const n = graph.stations[i].n;
+    if (n === name) exact.push(i);
+    else if (strip(n) === strip(name)) loose.push(i);
   }
-  for (let i = 0; i < graph.stations.length; i++) {
-    if (strip(graph.stations[i].n) === strip(name)) return i;
+  const rail = a => a.filter(i => !graph.stations[i].m);
+  for (const cand of [rail(exact), rail(loose), exact, loose]) {
+    if (cand.length) return cand;
   }
-  return -1;
+  return [];
+}
+const idOf = name => (idsOf(name)[0] ?? -1);
+
+// index.html の doSearch と同じく、同名駅の候補を総当たりして到着の早い順に並べる。
+// 「高松」(高松(東京)/高松(石川)/高松(香川))のような同名駅で、先頭候補だけを見ると
+// 別地方の駅を掴んで無意味な経路になる。
+function journeysByName(fromName, toName, start, opts) {
+  const out = [], sigs = new Set();
+  for (const s of idsOf(fromName)) {
+    for (const g of idsOf(toName)) {
+      if (s === g) continue;
+      for (const j of R.findJourneys(s, g, start, opts || {})) {
+        const sig = `${j.dep}|${j.arr}|` + j.legs.map(l => l.kind === 'ride' ? l.line + l.dep : 'w').join('>');
+        if (!sigs.has(sig)) { sigs.add(sig); out.push(j); }
+      }
+    }
+  }
+  out.sort((a, b) => (a.arr - b.arr) || (b.dep - a.dep) || (a.transfers - b.transfers));
+  return out;
 }
 
 const fmt = m => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -51,9 +77,8 @@ const args = process.argv.slice(2);
 if (args.length >= 2) {
   const t = args[2] ? args[2].split(':') : ['9', '0'];
   const start = (+t[0]) * 60 + (+t[1] || 0);
-  const s = idOf(args[0]), g = idOf(args[1]);
-  if (s < 0 || g < 0) { console.log('駅が見つからない'); process.exit(1); }
-  const js = R.findJourneys(s, g, start, {});
+  if (!idsOf(args[0]).length || !idsOf(args[1]).length) { console.log('駅が見つからない'); process.exit(1); }
+  const js = journeysByName(args[0], args[1], start, {});
   if (!js.length) { console.log('経路なし'); process.exit(1); }
   for (const j of js.slice(0, 5)) {
     const d = describe(j);

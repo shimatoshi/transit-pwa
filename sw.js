@@ -4,29 +4,35 @@
 //
 //  1. ASSETS のURLは index.html が実際に投げるURLと1文字も違ってはいけない。
 //     Cache API の照合はクエリ文字列まで含めた完全一致なので、index.html が
-//     'graph_v2.json?v=4' を取りに行くのに './graph_v2.json' をプリキャッシュしても
+//     'graph_v2.json?v=5' を取りに行くのに './graph_v2.json' をプリキャッシュしても
 //     絶対にヒットしない。?v= を上げたら下の DATA も必ず同時に上げること。
+//     逆に、中身を差し替えたのに ?v= を据え置くのも禁止。実データは cacheFirst で
+//     配るので (「?v= が変われば別URL」という前提に乗っている)、URLが同じままだと
+//     更新が永久に届かない。
 //     (取りこぼし保険として、ページ側から CACHE_URLS メッセージでも登録できるようにしてある)
 //
 //  2. 「壊れたレスポンス」でキャッシュを上書きしないこと。
 //     ネットワーク優先で無条件に cache.put すると、キャプティブポータルのログイン画面
 //     (200 OK + text/html) が graph_v2.json の中身として保存され、次のオフライン起動で
 //     JSON.parse が落ちる。これがユーザー報告の「データが飛ぶ」の正体。
-const VERSION = 'v41';
+// v42 = オフラインキャッシュ修正(v41) と マイナー路線QA(v41) の統合。
+// 両ブランチが独立に v41 を名乗ってしまったので、どちらのクライアントから見ても
+// 新しい世代になるよう v42 にする。
+const VERSION = 'v42';
 const CACHE_NAME = `transit-${VERSION}`;
 
 // アプリの外枠。これが無いと起動すらできない。
 const SHELL = [
   './',
   './index.html',
-  './router_v3.js?v=11',
+  './router_v3.js?v=12',
   './manifest.json',
 ];
 
 // 大きい実データ。壊れた/古いものを混ぜて配ると誤った時刻を表示しかねないので、
 // これらは常に完全一致でしか返さない (ignoreSearch フォールバックの対象外)。
 const DATA = [
-  './graph_v2.json?v=4',
+  './graph_v2.json?v=5',
   './trains_v3_meta.json?v=3',
   './fares.json?v=10',
   './trains_v3.bin.gz?v=3',

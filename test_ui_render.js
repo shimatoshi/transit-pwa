@@ -19,7 +19,7 @@ global.RouterV3 = require(path.join(BASE, 'router_v3.js'));
 const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
   '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, ' +
-  'setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
+  'overnightHint, setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
   'setGraph: g => { graph = g; } };';
 vm.runInThisContext(src, { filename: 'index.html:inline' });
 
@@ -62,6 +62,25 @@ t('findAllByName は鉄道駅のみ返す',
   __ui.findAllByName('新橋').every(i => !S[i].m), JSON.stringify(__ui.findAllByName('新橋')));
 t('バス停専用名は findAllByName でバス停を返す',
   __ui.findAllByName('晴海三丁目').every(i => S[i].m));
+// 鉄道駅名が括弧付きで、括弧なしの同名バス停がある駅(大手町/日本橋/早稲田/大曲 等16件)。
+// 完全一致だけ見るとバス停に隠れ、?from=大手町 のディープリンクが停留所に解決されていた。
+for (const [q, want] of [['大手町', '大手町(東京)'], ['日本橋', '日本橋(東京)'],
+                         ['早稲田', '早稲田(メトロ)'], ['大曲', '大曲(秋田)']]) {
+  const ids = __ui.findAllByName(q);
+  t(`「${q}」が同名バス停でなく鉄道駅に解決される`,
+    ids.length > 0 && ids.every(i => !S[i].m) && ids.some(i => S[i].n === want),
+    ids.map(i => S[i].n).join('/'));
+}
+
+// --- 1日で着かない超長距離の「経路なし」ヒント ---
+// 稚内→博多 等は当日中の列車では到達できず必ず経路なしになる。素の「見つかりません」だと
+// データ欠落と区別できないので、遠距離ODでは理由を出す。近距離では出してはいけない。
+t('超長距離(稚内→博多)は宿泊ヒントが出る',
+  /宿泊を挟む行程/.test(__ui.overnightHint(rid('稚内'), rid('博多'))));
+t('中距離(東京→博多)では宿泊ヒントを出さない',
+  __ui.overnightHint(rid('東京'), rid('博多')) === '');
+t('近距離(志布志→都城)では宿泊ヒントを出さない',
+  __ui.overnightHint(rid('志布志'), rid('都城')) === '');
 
 // --- バス限定モード ---
 const jb = RouterV3.findJourneys(rid('渋谷'), rid('六本木'), 600, { day: 0, busOnly: true })[0];
