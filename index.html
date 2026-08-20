@@ -706,6 +706,22 @@ function initAutocomplete() {
   document.querySelectorAll('.field-row').forEach(setupFieldAC);
 }
 
+// サジェストは position:absolute で浮くので、そのままだと真下の入力欄(出発欄を
+// 打っているときの到着欄など)や検索ボタンを完全に覆ってしまう。覆われた到着欄を
+// タップすると、実際に触れているのは候補(.ac-item)なので mousedown の
+// preventDefault がフォーカス移動ごと打ち消し、「到着欄をタップしたのに出発欄に
+// フォーカスが戻る(しかも出発駅が勝手に書き換わる)」ように見えていた。
+// 表示中は行の下に候補リストぶんの余白を確保して、他の操作対象を隠さないようにする。
+const AC_GAP = 12;  // dropdown の margin-top(4px) + 行間(8px)
+function showDropdown(row, dropdown) {
+  dropdown.classList.add('show');
+  if (row && row.style) row.style.marginBottom = (dropdown.offsetHeight + AC_GAP) + 'px';
+}
+function hideDropdown(row, dropdown) {
+  dropdown.classList.remove('show');
+  if (row && row.style) row.style.marginBottom = '';
+}
+
 function setupFieldAC(row) {
   const input = row.querySelector('input');
   const dropdown = row.querySelector('.ac-dropdown');
@@ -720,7 +736,7 @@ function setupFieldAC(row) {
     delete selectedStations[input.dataset.fieldId];
     const results = searchStations(input.value);
     if (results.length === 0 || !input.value) {
-      dropdown.classList.remove('show');
+      hideDropdown(row, dropdown);
       return;
     }
     dropdown.innerHTML = results.map(s => `
@@ -731,7 +747,7 @@ function setupFieldAC(row) {
         </div>
       </div>
     `).join('');
-    dropdown.classList.add('show');
+    showDropdown(row, dropdown);
 
     dropdown.querySelectorAll('.ac-item').forEach(el => {
       el.addEventListener('mousedown', (e) => {
@@ -739,13 +755,16 @@ function setupFieldAC(row) {
         const id = parseInt(el.dataset.id);
         input.value = graph.stations[id].n;
         selectedStations[input.dataset.fieldId] = id;
-        dropdown.classList.remove('show');
+        hideDropdown(row, dropdown);
       });
     });
   });
 
+  // 他の欄にフォーカスが移ったら、その欄の候補と入れ替わりで閉じる。
+  // 閉じるのを遅らせているのは、候補タップ(mousedown → blur → click)の途中で
+  // リストを消してしまわないため。
   input.addEventListener('blur', () => {
-    setTimeout(() => dropdown.classList.remove('show'), 150);
+    setTimeout(() => hideDropdown(row, dropdown), 150);
   });
 }
 
