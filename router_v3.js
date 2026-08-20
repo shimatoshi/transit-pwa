@@ -133,8 +133,8 @@ function buildConnections(arrayBuffer, opts) {
   }
 
   // --- パス1: depT のヒストグラム。深夜跨ぎ用の複製(dep<360 を +1440)も同時に数える
-  const NBUCKET = maxDep + 1440 + 2;
-  const bucket = new Int32Array(NBUCKET + 1);
+  const NBUCKET = maxDep + 1440 + 2;   // 使う添字は d と d+1440 (d<360) の両方
+  const bucket = new Int32Array(NBUCKET);
   let total = 0;
   for (let t = 0; t < ntrips; t++) {
     for (let i = tripOff[t]; i < tripOff[t + 1] - 1; i++) {
@@ -145,10 +145,9 @@ function buildConnections(arrayBuffer, opts) {
       }
     }
   }
-  // 累積和 → 各depTの書き込み開始位置
+  // 累積和 → 各depTの書き込み開始位置。以降 bucket[] は「次にどこへ書くか」として使い回す。
   let acc = 0;
   for (let b = 0; b < NBUCKET; b++) { const c = bucket[b]; bucket[b] = acc; acc += c; }
-  bucket[NBUCKET] = acc;
 
   // --- パス2: 確定位置へ直接書き込む (= depT昇順、同時刻内は生成順)
   const cDepS = new Uint16Array(total), cArrS = new Uint16Array(total);

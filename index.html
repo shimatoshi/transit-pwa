@@ -606,8 +606,12 @@ function startBinWorker(binUrl) {
 // 制御下に入ってから取れば、その取得自体がそのままオフライン用のキャッシュになる。
 // SWが来ない環境(未対応/プライベートモード/登録失敗)で止まらないよう上限を切る。
 const SW_CONTROL_WAIT_MS = 2500;
+// 登録はここで1回だけ。制御待ちと下の更新監視で同じ registration を使う。
+const swRegistration = ('serviceWorker' in navigator)
+  ? navigator.serviceWorker.register('sw.js') : null;
+
 function awaitServiceWorkerControl() {
-  if (!('serviceWorker' in navigator)) return Promise.resolve(false);
+  if (!swRegistration) return Promise.resolve(false);
   if (navigator.serviceWorker.controller) return Promise.resolve(true);
   return new Promise(resolve => {
     let done = false;
@@ -622,7 +626,7 @@ function awaitServiceWorkerControl() {
     const timer = setTimeout(() => finish(false), SW_CONTROL_WAIT_MS);
     navigator.serviceWorker.addEventListener('controllerchange', onChange);
     // 登録そのものが失敗するなら待つ意味が無いので即諦める
-    navigator.serviceWorker.register('sw.js').catch(() => finish(false));
+    swRegistration.catch(() => finish(false));
   });
 }
 
@@ -1464,8 +1468,9 @@ function toggleDetail() {
 }
 
 // === Service Worker + Offline ===
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').then(reg => {
+if (swRegistration) {
+  // 登録自体は上の awaitServiceWorkerControl と共用する (二重登録しない)
+  swRegistration.then(reg => {
     reg.addEventListener('updatefound', () => {
       const newSW = reg.installing;
       newSW.addEventListener('statechange', () => {
@@ -1474,7 +1479,9 @@ if ('serviceWorker' in navigator) {
         }
       });
     });
-  });
+    // 登録が失敗する環境(プライベートモード等)でも未処理rejectionを出さない。
+    // SWが無くてもオンラインなら普通に動くので、ここは黙って諦めてよい。
+  }).catch(e => console.warn('Service Worker を登録できませんでした:', e));
 
   // Request persistent storage
   if (navigator.storage && navigator.storage.persist) {
