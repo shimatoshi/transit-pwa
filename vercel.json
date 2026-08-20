@@ -1,9 +1,21 @@
 {
   "headers": [
     {
-      "source": "/(.*)",
+      "source": "/((?!graph_v2\\.json|trains_v3_meta\\.json|fares\\.json|trains_v3\\.bin\\.gz).*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/(graph_v2\\.json|trains_v3_meta\\.json|fares\\.json|trains_v3\\.bin\\.gz)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
       ]
     }
   ]

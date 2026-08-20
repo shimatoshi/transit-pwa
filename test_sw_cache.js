@@ -112,6 +112,16 @@ const listOf = name => {
 const SW_SHELL = listOf('SHELL'), SW_DATA = listOf('DATA'), SW_OPTIONAL = listOf('OPTIONAL');
 const SW_REQUIRED = [...SW_SHELL, ...SW_DATA];
 
+// 実データは install ではなく、ページが読み終わったあとの CACHE_URLS で入る。
+// 「全部揃った端末」を作りたいテストはこの手順を通す。
+async function installAndFill(sw, urls = SW_DATA) {
+  await evtRun(sw.handlers.install);
+  const e = evt({ data: { type: 'CACHE_URLS', urls } });
+  sw.handlers.message(e);
+  await e._done();
+  await evtRun(sw.handlers.activate);
+}
+
 // 全部成功する fetch (正しい Content-Type を返す正常なサーバ)
 const okFetch = async req => {
   const p = new URL(abs(req)).pathname;
@@ -149,6 +159,15 @@ async function copyCaches(from, to) {
   // DATA_URLS の各値
   const du = /const DATA_URLS = \{([\s\S]*?)\};/.exec(idx);
   if (du) for (const m of du[1].matchAll(/'([^']+)'/g)) wanted.add('./' + m[1].replace(/^\.\//, ''));
+  // Worker は new Worker(...) で読まれるので src= 属性には出てこない。
+  // ここを見落とすとオフラインで Worker が作れず、毎回フォールバック経路に落ちる。
+  const wu = /const WORKER_URL = '([^']+)'/.exec(idx);
+  if (wu) wanted.add('./' + wu[1].replace(/^\.\//, ''));
+  // その Worker が importScripts するものも同じく必要
+  const workerSrc = fs.readFileSync(path.join(BASE_DIR, 'data_worker.js'), 'utf8');
+  for (const m of workerSrc.matchAll(/importScripts\('([^']+)'\)/g)) {
+    wanted.add('./' + m[1].replace(/^\.\//, ''));
+  }
 
   const precached = new Set([...SW_REQUIRED, ...SW_OPTIONAL].map(u => u.replace(/^\.\//, './')));
   const missing = [...wanted].filter(u => u !== './sw.js' && !precached.has(u));
@@ -170,7 +189,7 @@ async function copyCaches(from, to) {
   const good = json({ stations: ['正常なデータ'] });
   let phase = 'ok';
   const sw = loadSW({ fetchImpl: async req => (phase === 'ok' ? good.clone() : html()) });
-  await evtRun(sw.handlers.install);
+  await installAndFill(sw);
   phase = 'captive';
 
   const url = SW_DATA.find(u => u.includes('graph_v2')) || SW_DATA[0];
@@ -191,8 +210,7 @@ async function copyCaches(from, to) {
 // --- 3. シェル資産(network-first)でもHTMLでキャッシュを潰さない ----------------
 {
   const good = loadSW({ fetchImpl: okFetch });
-  await evtRun(good.handlers.install);
-  await evtRun(good.handlers.activate);
+  await installAndFill(good);
 
   // 同じ端末のまま、サーバの応答だけがキャプティブポータルに変わった状況
   const sw = loadSW({ fetchImpl: async () => html() });
@@ -237,8 +255,7 @@ async function copyCaches(from, to) {
 // 「古いエントリを消した後に書き込みが失敗」してデータが消える。
 {
   const good = loadSW({ fetchImpl: okFetch });
-  await evtRun(good.handlers.install);
-  await evtRun(good.handlers.activate);
+  await installAndFill(good);
 
   // Content-Length は 9999 と言うのに本文は2バイトしか来ないサーバ
   const sw = loadSW({ fetchImpl: async () => new Response(Buffer.from([0x1f, 0x8b]),
@@ -259,8 +276,7 @@ async function copyCaches(from, to) {
 // --- 5b. データ資産はキャッシュ優先なのでネットワークの影響を受けない ------------
 {
   const good = loadSW({ fetchImpl: okFetch });
-  await evtRun(good.handlers.install);
-  await evtRun(good.handlers.activate);
+  await installAndFill(good);
   const sw = loadSW({ fetchImpl: async () => html() });
   await copyCaches(good.caches, sw.caches);
   const binUrl = SW_DATA.find(u => u.includes('.bin.gz'));
@@ -317,8 +333,7 @@ async function copyCaches(from, to) {
 // map-app からのリンクをオフラインで開くと真っ白になっていた。
 {
   const sw = loadSW({ fetchImpl: okFetch });
-  await evtRun(sw.handlers.install);
-  await evtRun(sw.handlers.activate);
+  await installAndFill(sw);
 
   // 以降オフラインにする
   const swOff = loadSW({ fetchImpl: offlineFetch });
@@ -385,13 +400,120 @@ async function copyCaches(from, to) {
 // --- 12. CACHE_STATUS が実際の充足状況を返す -----------------------------------
 {
   const sw = loadSW({ fetchImpl: okFetch });
-  await evtRun(sw.handlers.install);
+  await installAndFill(sw);
   let got = null;
   const e = evt({ data: { type: 'CACHE_STATUS' }, ports: [{ postMessage: m => { got = m; } }] });
   sw.handlers.message(e);
   await e._done();
   t('CACHE_STATUS が欠品なしを報告する', got && got.missing.length === 0 && got.have.length === SW_REQUIRED.length,
     got ? `have=${got.have.length} missing=${got.missing.length}` : 'no reply');
+}
+
+// --- 12b. gzip で配られたレスポンスを truncated と誤判定しない ------------------
+// Content-Length は圧縮後のバイト数、本文は展開後のバイト数。単純比較すると必ず
+// 食い違うので、正常なレスポンスを全部弾いて install が毎回失敗する
+// (= vercel 本番のように text/json を自動圧縮する環境でオフライン対応が死ぬ)。
+{
+  const zlib = require('zlib');
+  const sw = loadSW({ fetchImpl: async req => {
+    const p = new URL(abs(req)).pathname;
+    const raw = Buffer.from(/\.(gz|bin|png)$/.test(p)
+      ? [0x1f, 0x8b, 1, 2, 3] : Buffer.from(`/* ${p} ${'x'.repeat(200)} */`));
+    const body = zlib.gzipSync(raw);
+    return new Response(body, { status: 200, headers: {
+      'content-type': /\.json$/.test(p) ? 'application/json'
+        : /\.js$/.test(p) ? 'application/javascript'
+        : /\.(gz|bin)$/.test(p) ? 'application/octet-stream'
+        : /\.png$/.test(p) ? 'image/png' : 'text/html',
+      // Node の Response は content-encoding を見て勝手に展開しないので、
+      // 「圧縮後の長さを名乗り、本文は展開後」というブラウザと同じ形を手で作る
+      'content-encoding': 'gzip',
+      'content-length': String(body.length),
+    } });
+  } });
+  // ここが壊れていると install が例外で落ちる
+  let installOk = true;
+  await evtRun(sw.handlers.install).catch(() => { installOk = false; });
+  t('gzip配信でも install が完走する(圧縮長と展開長を混同しない)', installOk);
+
+  const cache = await sw.caches.open((await sw.caches.keys())[0]);
+  const missing = [];
+  for (const u of SW_SHELL) if (!(await cache.match(u))) missing.push(u);
+  t('gzip配信のシェルがキャッシュされる', missing.length === 0,
+    missing.length ? '欠け: ' + missing.join(', ') : `${SW_SHELL.length}件`);
+}
+
+// --- 13. install は実データをネットワークから取りに行かない ----------------------
+// 初回訪問ではページ自身が同じ11MBを取っている。install がそこに重ねて取りに行くと
+// 通信量が丸ごと2倍になり、細い回線ではページ側の取得まで遅くなる。
+{
+  const fetched = [];
+  const sw = loadSW({ fetchImpl: async req => { fetched.push(new URL(abs(req)).pathname); return okFetch(req); } });
+  await evtRun(sw.handlers.install);
+  const dataPaths = SW_DATA.map(u => new URL(u, BASE).pathname);
+  const hit = fetched.filter(p => dataPaths.includes(p));
+  t('install が実データを取りに行かない(初回の二重ダウンロードが無い)', hit.length === 0,
+    hit.length ? '取りに行った: ' + hit.join(', ') : `シェル${fetched.length}件のみ`);
+
+  // シェルは install で確保されている(これが無いと起動できない)
+  const cache = await sw.caches.open((await sw.caches.keys())[0]);
+  const shellMissing = [];
+  for (const u of SW_SHELL) if (!(await cache.match(u))) shellMissing.push(u);
+  t('シェルは install で確保される', shellMissing.length === 0,
+    shellMissing.length ? '欠け: ' + shellMissing.join(', ') : `${SW_SHELL.length}件`);
+}
+
+// --- 14. CACHE_URLS はHTTPキャッシュ経由で取る ---------------------------------
+// ページが直前に落としたものを拾い直すだけなので no-cache にしてはいけない。
+// no-cache だと本文をもう一度サーバから引き直すことになり、二重取得が復活する。
+{
+  const modes = [];
+  const sw = loadSW({ fetchImpl: async req => { modes.push(req.cache); return okFetch(req); } });
+  await evtRun(sw.handlers.install);
+  modes.length = 0;
+  const e = evt({ data: { type: 'CACHE_URLS', urls: SW_DATA } });
+  sw.handlers.message(e);
+  await e._done();
+  t('CACHE_URLS はHTTPキャッシュを使う', modes.length > 0 && modes.every(m => m === 'default'),
+    JSON.stringify(modes));
+
+  // 逆に RECACHE(壊れたデータの修復)はサーバに取り直させないと直らない
+  const modes2 = [];
+  const sw2 = loadSW({ fetchImpl: async req => { modes2.push(req.cache); return okFetch(req); } });
+  await evtRun(sw2.handlers.install);
+  modes2.length = 0;
+  const e2 = evt({ data: { type: 'RECACHE' }, ports: [{ postMessage() {} }] });
+  sw2.handlers.message(e2);
+  await e2._done();
+  t('RECACHE はHTTPキャッシュを迂回する', modes2.length > 0 && modes2.every(m => m === 'no-cache'),
+    JSON.stringify([...new Set(modes2)]));
+}
+
+// --- 15. 実データが揃うまで旧世代のキャッシュを消さない --------------------------
+// install で実データを取らなくなった分、activate で無条件に旧世代を消すと
+// 「新旧どちらのデータも無い」瞬間ができてしまう。
+{
+  const sw = loadSW({ fetchImpl: offlineFetch });
+  const old = await sw.caches.open('transit-v40');
+  // 旧世代は ?v= が1つ前のデータを持っている(= 新URLとしては引き継げない)
+  for (const u of SW_SHELL) await old.put(u, new Response('旧世代:' + u, { status: 200 }));
+  await old.put('./graph_v2.json?v=3', new Response('旧世代データ', { status: 200 }));
+
+  await evtRun(sw.handlers.install);
+  await evtRun(sw.handlers.activate);
+  t('新データが揃うまで旧世代キャッシュを残す', (await sw.caches.keys()).includes('transit-v40'));
+  t('旧世代の実データが消えていない',
+    (await (await sw.caches.open('transit-v40')).match('./graph_v2.json?v=3')) !== undefined);
+
+  // オンラインに戻ってページが読み終われば CACHE_URLS が来て、そこで初めて片付く
+  const sw2 = loadSW({ fetchImpl: okFetch });
+  await copyCaches(sw.caches, sw2.caches);
+  await evtRun(sw2.handlers.install);
+  const e = evt({ data: { type: 'CACHE_URLS', urls: SW_DATA } });
+  sw2.handlers.message(e);
+  await e._done();
+  t('揃った時点で旧世代キャッシュが片付く', !(await sw2.caches.keys()).includes('transit-v40'),
+    JSON.stringify(await sw2.caches.keys()));
 }
 
 console.log(fail === 0 ? '\nすべて成功' : `\n${fail} 件失敗`);
