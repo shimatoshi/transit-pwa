@@ -1,7 +1,7 @@
 // index.html のレンダリング経路をDOM無しで叩いて、バスleg描画が壊れていないか確認する
 const fs = require('fs'), vm = require('vm'), path = require('path');
 const BASE = __dirname;
-const el = () => new Proxy({ style: {}, dataset: {}, classList: { add(){}, remove(){}, contains(){return false;} },
+const el = () => new Proxy({ style: {}, dataset: {}, classList: { add(){}, remove(){}, contains(){return false;}, toggle(){return false;} },
   addEventListener(){}, querySelector(){return null;}, querySelectorAll(){return [];},
   appendChild(){}, insertBefore(){}, checked: true, value: '' }, {
   get(t, k) { return k in t ? t[k] : ''; }, set(t, k, v) { t[k] = v; return true; } });
@@ -18,7 +18,9 @@ global.RouterV3 = require(path.join(BASE, 'router_v3.js'));
 
 const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
-  '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, setGraph: g => { graph = g; } };';
+  '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, ' +
+  'setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
+  'setGraph: g => { graph = g; } };';
 vm.runInThisContext(src, { filename: 'index.html:inline' });
 
 const g = JSON.parse(fs.readFileSync(path.join(BASE, 'graph_v2.json'), 'utf8'));
@@ -60,6 +62,27 @@ t('findAllByName は鉄道駅のみ返す',
   __ui.findAllByName('新橋').every(i => !S[i].m), JSON.stringify(__ui.findAllByName('新橋')));
 t('バス停専用名は findAllByName でバス停を返す',
   __ui.findAllByName('晴海三丁目').every(i => S[i].m));
+
+// --- バス限定モード ---
+const jb = RouterV3.findJourneys(rid('渋谷'), rid('六本木'), 600, { day: 0, busOnly: true })[0];
+t('バス限定で渋谷→六本木の経路が出る', !!jb);
+const hb = __ui.renderOneRoute(jb, 0);
+t('バス限定カードに鉄道legが無い', jb.legs.every(l => l.kind !== 'ride' || l.mode === 1));
+t('バス限定カードは ¥0 を出さず「運賃別途」にする',
+  !hb.includes('¥0') && hb.includes('運賃別途'));
+t('バス限定カードで「運賃別途」が二重に出ない',
+  (hb.match(/運賃別途/g) || []).length === 1);
+t('バス限定カードに undefined が無い', !/undefined/.test(hb));
+
+t('交通手段の初期値は all', __ui.getTravelMode() === 'all');
+__ui.setTravelMode('bus');
+t('setTravelMode でモードが切り替わる', __ui.getTravelMode() === 'bus');
+const sugBus = __ui.searchStations('新橋');
+t('バス限定モードのサジェストは停留所が上', sugBus.length > 1 && sugBus[0].mode === 1,
+  sugBus.slice(0, 3).map(s => `${s.name}(${s.mode})`).join(', '));
+__ui.setTravelMode('all');
+t('all に戻すとサジェストも鉄道駅が上', __ui.searchStations('新橋')[0].mode === 0);
+t('不正なモードは all に落ちる', (__ui.setTravelMode('zzz'), __ui.getTravelMode() === 'all'));
 
 __ui.renderCredits(meta.sources);
 t('renderCredits が例外を出さない', true);

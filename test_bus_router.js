@@ -16,6 +16,8 @@
  *   B) 鉄道→バスの乗換を含む経路が実際に引けること
  *   C) opts.noBus でバスが完全に消えること
  *   D) データ構造の不変条件(モードフラグ / バス停 / 徒歩連絡 / 運賃の扱い)
+ *   E) opts.busOnly (バス限定モード) — 鉄道が完全に消え、都内のODでバスだけの
+ *      経路が引けること。営業エリア外では経路なしになること。
  */
 'use strict';
 const fs = require('fs');
@@ -261,6 +263,94 @@ check('鉄道 leg → バス leg の乗換が成立するケースがある', nT
     if (k && k.legs.some(l => l.kind === 'ride' && l.mode === 1)) anyBus = true;
   }
   check('noBus:true の鉄道OD検索にバスが1件も混ざらない', !anyBus);
+}
+
+// ---------- E) busOnly (バス限定モード) ----------
+{
+  const hasRail = j => j.legs.some(l => l.kind === 'ride' && l.mode !== 1);
+  const hasBus  = j => j.legs.some(l => l.kind === 'ride' && l.mode === 1);
+
+  // E1) 都営バスの営業エリア内。駅名で指定しても徒歩連絡で停留所まで届く
+  const BUS_ONLY_OK = [
+    { from: '渋谷', to: '六本木', at: 600, day: 0 },
+    { from: '品川', to: '天王洲アイル', at: 600, day: 0 },
+    { from: '東京', to: '豊洲', at: 600, day: 0 },
+    { from: '上野', to: '浅草', at: 600, day: 0 },
+    { from: '池袋', to: '大塚', at: 600, day: 0 },
+    { from: '錦糸町', to: '東京都現代美術館前', at: 600, day: 0 },
+    { from: '新橋', to: '晴海三丁目', at: 600, day: 0 },
+    { from: '渋谷', to: '六本木', at: 600, day: 2 },   // 休日ダイヤ
+  ];
+  for (const c of BUS_ONLY_OK) {
+    const s = railId(c.from);
+    const g = busId(c.to) >= 0 ? busId(c.to) : railId(c.to);
+    if (s < 0 || g < 0) { check(`E1 ${c.from}→${c.to}`, false, '駅/停留所が見つからない'); continue; }
+    const j = R.query(s, g, c.at, { day: c.day, busOnly: true });
+    check(`E1 ${c.from}→${c.to}${c.day ? '(休)' : ''} をバスだけで引ける`,
+      !!j && hasBus(j) && !hasRail(j),
+      j ? `${fmt(j.dep)}→${fmt(j.arr)} ${j.arr - j.dep}分 / ${describe(j)}` : '経路なし');
+  }
+
+  // E2) findJourneys の候補が1本残らず鉄道抜きであること(多様化・優等抜き候補も含めて)
+  {
+    const js = R.findJourneys(railId('渋谷'), railId('六本木'), 600, { day: 0, busOnly: true });
+    check('E2 findJourneys(busOnly) の全候補が鉄道 leg を含まない',
+      js.length > 0 && js.every(j => !hasRail(j) && hasBus(j)), `${js.length}候補`);
+  }
+
+  // E3) 都営バスの営業エリア外/遠距離はバス限定では出ない(鉄道に化けない)
+  const BUS_ONLY_NG = [['札幌', '小樽'], ['東京', '新大阪'], ['柏', '東京'], ['新宿', '横浜']];
+  for (const [a, b] of BUS_ONLY_NG) {
+    const s = railId(a), g = railId(b);
+    if (s < 0 || g < 0) continue;
+    const j = R.query(s, g, 600, { day: 0, busOnly: true });
+    check(`E3 ${a}→${b} はバス限定で経路なし(鉄道に化けない)`, !j, j ? describe(j) : '');
+  }
+
+  // E4) busOnly と noBus の同時指定。両立しないので busOnly を優先する
+  {
+    const j = R.query(railId('渋谷'), railId('六本木'), 600, { day: 0, busOnly: true, noBus: true });
+    check('E4 busOnly+noBus は busOnly が勝つ', !!j && hasBus(j) && !hasRail(j),
+      j ? describe(j) : '経路なし');
+  }
+
+  // E5) 前後の便・始発終バス・到着逆算も busOnly を尊重する
+  {
+    const s = railId('渋谷'), g = railId('六本木'), o = { day: 0, busOnly: true };
+    const base = R.query(s, g, 600, o);
+    const nj = R.nextJourney(s, g, base.dep, o);
+    const pj = R.prevJourney(s, g, base.dep, o);
+    const fl = R.firstLastOfDay(s, g, o);
+    const ld = R.latestDeparture(s, g, 700, o);
+    const all = [nj, pj, fl.first, fl.last, ld].filter(Boolean);
+    check('E5 next/prev/firstLast/latestDeparture が busOnly を尊重する',
+      all.length === 5 && all.every(j => !hasRail(j) && hasBus(j)),
+      `${all.length}/5本 取得 / 始発${fl.first ? fmt(fl.first.dep) : '-'} 終バス${fl.last ? fmt(fl.last.dep) : '-'}`);
+  }
+
+  // E6) バス限定スキャン用の添字配列がバスconnを過不足なく、depT昇順で持っている
+  {
+    R.query(railId('渋谷'), railId('六本木'), 600, { day: 0, busOnly: true }); // 遅延生成を走らせる
+    const d = R.data, idx = d.busConn;
+    let want = 0;
+    for (let c = 0; c < d.nConn; c++) if (d.tripMode[d.cTrip[c]] === 1) want++;
+    let sorted = true, allBus = true;
+    for (let i = 0; i < idx.length; i++) {
+      if (d.tripMode[d.cTrip[idx[i]]] !== 1) allBus = false;
+      if (i && d.cDepT[idx[i - 1]] > d.cDepT[idx[i]]) sorted = false;
+    }
+    check('E6 busConn 添字がバスconnを過不足なく持つ', idx.length === want && allBus,
+      `${idx.length} / ${want} (全conn ${d.nConn})`);
+    check('E6 busConn 添字が出発時刻昇順', sorted);
+  }
+
+  // E7) バス限定の運賃は全区間が対象外(=鉄道運賃0円)で、本数だけ返る
+  {
+    const j = R.query(railId('渋谷'), railId('六本木'), 600, { day: 0, busOnly: true });
+    const f = R.journeyFare(j);
+    check('E7 バス限定の運賃は鉄道分0円+バス本数', f.total === 0 && f.busLegs > 0 && !f.breakdown.length,
+      `¥${f.total} / バス${f.busLegs}区間`);
+  }
 }
 
 console.log(fail === 0 ? '\nALL OK' : `\n${fail} FAILED`);
