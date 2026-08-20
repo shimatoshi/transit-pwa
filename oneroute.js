@@ -30,7 +30,7 @@ if (!best) { out.error = '経路なし'; console.log(JSON.stringify(out)); proce
 const fr = R.journeyFare(best);
 out.dep = best.dep; out.arr = best.arr; out.min = best.arr - best.dep;
 out.transfers = best.transfers; out.fare = fr.total;
-out.express = fr.breakdown.filter(b => /料金$/.test(b.company)).reduce((a, b) => a + b.fare, 0);
+out.express = fr.breakdown.filter(b => /料金/.test(b.company)).reduce((a, b) => a + b.fare, 0);
 out.lines = best.legs.filter(l => l.kind === 'ride').map(l => (l.line || '').replace(/^ＪＲ/, '') + '[' + l.type + ']');
 // 各レグの実発着時刻(分単位検証用): 乗車レグのみ
 out.legs = best.legs.filter(l => l.kind === 'ride').map(l => ({

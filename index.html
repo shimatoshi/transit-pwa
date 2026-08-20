@@ -188,7 +188,8 @@ body {
 }
 .opt-toggles {
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;        /* 座席セレクトを足したので狭い画面では折り返す */
+  gap: 6px 14px;
   padding: 0 12px 8px;
   font-size: 13px;
   color: var(--muted);
@@ -200,6 +201,14 @@ body {
   cursor: pointer;
 }
 .opt-toggles input { accent-color: var(--blue); }
+.opt-toggles select {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 4px;
+  font-size: 13px;
+  color: var(--text);
+  background: #fff;
+}
 /* 交通手段(すべて/鉄道のみ/バスのみ)。ソートバーと同じセグメント型に揃える */
 .mode-toggles { display: flex; gap: 6px; padding: 0 12px 8px; }
 .mode-btn {
@@ -214,7 +223,7 @@ body {
 }
 .mode-btn.on { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
 .mode-btn.on[data-mode="bus"] { background: #2e7d32; border-color: #2e7d32; }
-/* バス限定では特急/新幹線トグルが効かないので触れないようにする */
+/* バス限定では特急/新幹線/座席の設定が効かないので触れないようにする */
 .opt-toggles.dim { opacity: .4; pointer-events: none; }
 .search-btn {
   width: 100%;
@@ -440,6 +449,12 @@ body {
   <div class="opt-toggles" id="opt-toggles">
     <label><input type="checkbox" id="opt-express" checked onchange="saveOpts()"> 特急を使う</label>
     <label><input type="checkbox" id="opt-shinkansen" checked onchange="saveOpts()"> 新幹線を使う</label>
+    <label>座席
+      <select id="opt-seat" onchange="setSeat(this.value)">
+        <option value="reserved">指定席</option>
+        <option value="nonreserved">自由席</option>
+      </select>
+    </label>
   </div>
   <button class="search-btn" id="search-btn" onclick="doSearch()" disabled>検索</button>
 </div>
@@ -504,7 +519,7 @@ function getDayType() {
 const DATA_URLS = {
   graph: 'graph_v2.json?v=5',
   meta:  'trains_v3_meta.json?v=3',
-  fares: 'fares.json?v=10',
+  fares: 'fares.json?v=11',
   bin:   'trains_v3.bin.gz?v=3',
 };
 const WORKER_URL = 'data_worker.js?v=1';
@@ -999,10 +1014,25 @@ function setTravelMode(mode) {
   }
   saveOpts();
 }
+// 座席種別(指定席/自由席)。運賃の乗車券部分は変わらず特急料金だけが変わるので、
+// 再検索は不要で表示の作り直しだけでよい。
+function currentSeat() {
+  const el = document.getElementById('opt-seat');
+  return el && el.value === 'nonreserved' ? 'nonreserved' : 'reserved';
+}
+function setSeat(v) {
+  const el = document.getElementById('opt-seat');
+  if (el) el.value = v === 'nonreserved' ? 'nonreserved' : 'reserved';
+  saveOpts();
+  // 運賃キャッシュ(安い順ソート用)は席種込みなので捨てる
+  for (const j of allFoundRoutes) j._fare = null;
+  if (allFoundRoutes.length) renderRoutes();
+}
 function saveOpts() {
   localStorage.setItem('routeOpts', JSON.stringify({
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
+    seat: currentSeat(),
     mode: travelMode,
   }));
 }
@@ -1011,6 +1041,7 @@ function saveOpts() {
     const o = JSON.parse(localStorage.getItem('routeOpts') || '{}');
     if (o.express === false) document.getElementById('opt-express').checked = false;
     if (o.shinkansen === false) document.getElementById('opt-shinkansen').checked = false;
+    if (o.seat === 'nonreserved') document.getElementById('opt-seat').value = 'nonreserved';
     // mode 導入前の保存値(bus:false = バスを使わない)からの移行
     const mode = o.mode || (o.bus === false ? 'rail' : null);
     if (mode) setTravelMode(mode);
@@ -1094,6 +1125,7 @@ function doSearch() {
   const opts = {
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
+    seat: currentSeat(),             // 指定席/自由席(ランキングの運賃換算に効く)
     noBus: travelMode === 'rail',    // 鉄道のみ
     busOnly: travelMode === 'bus',   // バス限定
     day: getDayType(),               // 運転日フィルタ(0平日/1土/2休)
@@ -1237,7 +1269,7 @@ function renderOneRoute(j, index) {
   const arrStr = formatTime(j.arr);
   const totalMin = j.arr - j.dep;
   const km = RouterV3.journeyKm(j);
-  const fare = RouterV3.journeyFare(j);
+  const fare = RouterV3.journeyFare(j, { seat: currentSeat() });
   const rides = j.legs.filter(l => l.kind === 'ride');
   const nBusRides = rides.filter(isBusLeg).length;
 
@@ -1257,8 +1289,21 @@ function renderOneRoute(j, index) {
           : `<span style="font-size:13px;color:var(--muted)">運賃別途</span>`
       }</div>
       ${(() => {
-        const ex = fare.breakdown.filter(b => /料金$/.test(b.company)).reduce((a, b) => a + b.fare, 0);
-        return ex > 0 ? `<div style="font-size:11px;color:var(--muted)">うち特急料金 ¥${ex.toLocaleString()}</div>` : '';
+        const ex = fare.breakdown.filter(b => /料金/.test(b.company)).reduce((a, b) => a + b.fare, 0);
+        if (ex <= 0) return '';
+        const sf = fare.seatFares;
+        // 自由席のある列車を含むときだけ席種を出す。全車指定席(はやぶさ/あずさ等)は
+        // 選択の余地が無いので従来どおり「うち特急料金」だけ。
+        const seatLabel = sf ? (fare.seat === 'nonreserved' ? '自由席' : '指定席') : '';
+        let h = `<div style="font-size:11px;color:var(--muted)">うち特急料金 ¥${ex.toLocaleString()}${seatLabel ? '(' + seatLabel + ')' : ''}</div>`;
+        if (sf && sf.reserved !== sf.nonreserved) {
+          const other = fare.seat === 'nonreserved'
+            ? { key: 'reserved', label: '指定席', total: sf.reserved }
+            : { key: 'nonreserved', label: '自由席', total: sf.nonreserved };
+          const d = other.total - fare.total;
+          h += `<div style="font-size:11px;margin-top:1px"><a href="#" onclick="event.stopPropagation();event.preventDefault();setSeat('${other.key}')" style="color:var(--blue)">${other.label} ¥${other.total.toLocaleString()} (${d > 0 ? '+' : ''}${d.toLocaleString()})</a></div>`;
+        }
+        return h;
       })()}
       ${nBusRides && fare.total > 0 ? `<div style="font-size:11px;color:var(--orange)">バス運賃別途</div>` : ''}
     </div>
@@ -1416,8 +1461,8 @@ function shiftTrain(index, dir) {
 let currentSort = 'fast';   // fast=早い / cheap=安い / transfer=乗換少
 let showAllRoutes = false;
 
-function fareOf(j) {         // 運賃をキャッシュ(ソート用)
-  if (j._fare == null) j._fare = RouterV3.journeyFare(j).total;
+function fareOf(j) {         // 運賃をキャッシュ(ソート用)。席種を変えたら setSeat が捨てる
+  if (j._fare == null) j._fare = RouterV3.journeyFare(j, { seat: currentSeat() }).total;
   return j._fare;
 }
 const SORTERS = {
