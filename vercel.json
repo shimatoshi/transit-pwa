@@ -1,22 +1,21 @@
 {
-  "$comment": [
-    "実データ4本だけ immutable。内容が変わったら必ず index.html / sw.js の ?v= を上げること。",
-    "上げ忘れると1年間ブラウザのHTTPキャッシュに居座る (Cache API 側も ?v= を鍵にしているので",
-    "挙動としては元から同じだが、猶予が無くなる点だけ違う)。",
-    "残り全部は must-revalidate。index.html と sw.js が即座に更新されないと直せなくなるため。",
-    "2つのルールが同じファイルに当たらないよう、包括ルール側は否定先読みで4本を除外してある。"
-  ],
   "headers": [
     {
       "source": "/((?!graph_v2\\.json|trains_v3_meta\\.json|fares\\.json|trains_v3\\.bin\\.gz).*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
       ]
     },
     {
       "source": "/(graph_v2\\.json|trains_v3_meta\\.json|fares\\.json|trains_v3\\.bin\\.gz)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
       ]
     }
   ]
