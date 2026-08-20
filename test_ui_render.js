@@ -20,6 +20,7 @@ const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
   '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, ' +
   'overnightHint, setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
+  'showDropdown, hideDropdown, AC_GAP, ' +
   'setGraph: g => { graph = g; } };';
 vm.runInThisContext(src, { filename: 'index.html:inline' });
 
@@ -102,6 +103,29 @@ t('バス限定モードのサジェストは停留所が上', sugBus.length > 1
 __ui.setTravelMode('all');
 t('all に戻すとサジェストも鉄道駅が上', __ui.searchStations('新橋')[0].mode === 0);
 t('不正なモードは all に落ちる', (__ui.setTravelMode('zzz'), __ui.getTravelMode() === 'all'));
+
+// --- サジェストが下の入力欄を覆ってフォーカスを奪う不具合の再発防止 ---
+// 候補リストは position:absolute で浮くので、何もしないと出発欄の候補が到着欄や
+// 検索ボタンを完全に隠す。隠れた到着欄をタップすると実際に触るのは .ac-item で、
+// その mousedown の preventDefault がフォーカス移動を打ち消すため、
+// 「到着欄をタップしたのに出発欄にフォーカスが戻り、出発駅が書き換わる」ことになる。
+// 表示中は行の下に候補リストぶんの余白を確保して、他の欄が隠れないようにしてある。
+function makeDropdownStub(h) {
+  const dd = { offsetHeight: h, shown: false };
+  dd.classList = { add: c => { if (c === 'show') dd.shown = true; },
+                   remove: c => { if (c === 'show') dd.shown = false; } };
+  return dd;
+}
+const acRow = { style: {} }, acDd = makeDropdownStub(220);
+__ui.showDropdown(acRow, acDd);
+t('サジェスト表示で show が付く', acDd.shown);
+t('サジェスト表示中は行の下に候補リストぶんの余白を確保する(下の欄を覆わない)',
+  parseInt(acRow.style.marginBottom, 10) >= acDd.offsetHeight, acRow.style.marginBottom);
+t('確保する余白は候補の高さ + 行間ちょうど',
+  acRow.style.marginBottom === (220 + __ui.AC_GAP) + 'px', acRow.style.marginBottom);
+__ui.hideDropdown(acRow, acDd);
+t('サジェストを閉じたら余白も元に戻す', !acDd.shown && acRow.style.marginBottom === '',
+  JSON.stringify(acRow.style.marginBottom));
 
 __ui.renderCredits(meta.sources);
 t('renderCredits が例外を出さない', true);
