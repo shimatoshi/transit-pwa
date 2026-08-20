@@ -845,9 +845,14 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   const out = [];
   const sigs = new Set();
 
+  // 重複判定は「利用者に見えるもの」で行う。原ラベル(line)は直通運転で系統名が
+  // ブレる(横浜線の列車がＪＲ京浜東北・根岸線と記録される等)ため、原ラベルで
+  // 区別すると同じ列車・同じ時刻の経路が別物として2本並び、候補枠を食い潰す。
+  // 表示用に多数決補正済みの lineLabel と発着駅・発着時刻で判定する。
   function sig(j) {
     return j.legs.map(l => l.kind === 'ride'
-      ? `${l.line}:${l.type}:${l.dep}` : `w${l.from}-${l.to}`).join('|');
+      ? `${l.lineLabel || l.line}:${l.type}:${l.from}@${l.dep}>${l.to}@${l.arr}`
+      : `w${l.from}-${l.to}`).join('|');
   }
   function add(j) {
     if (!j) return false;
@@ -900,24 +905,61 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
     if (!add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banLines })))) break;
   }
 
-  // ランキング: 有料特急/新幹線には時間ペナルティを課し、特急料金を払う価値が
-  // ある(大幅に速い)時だけ上位に来るようにする。これで三ノ宮→姫路の「新快速4分差
-  // なのに新幹線」や大阪→京都の新幹線混入を抑える。
-  const PAID_PENALTY = 18;   // 有料特急/新幹線=実質+18分扱い(料金に見合う閾値)
+  // ランキング: 「実効到着時刻」= 到着 + 乗換ペナルティ + 割高分の時間換算 で比較する。
+  //
+  // 以前は有料優等に一律+18分の固定ペナルティを課していたが、固定値では
+  // 「¥2500払って4分速い新横浜→品川の新幹線一駅」と「¥5700払って6時間速い
+  // 東京→新大阪」を区別できず、前者が上位に残っていた(菊名→五反田、町田→品川、
+  // 大宮→横浜などで新幹線一駅・二駅が1〜3位を占めていた)。
+  // 実際の運賃差を時間に換算すれば、料金に見合う時だけ優等が上に来る。
+  // 同時に、所要時間が同じで運賃だけ高い経路(川崎→新宿のりんかい線経由 ¥628 と
+  // 埼京線経由 ¥440 が同着)も安い方が上に来る。
+  const YEN_PER_MIN = 40;    // 時間価値≒¥2400/時。¥40余分に払う価値があるのは1分speedupから
+  const PAID_PENALTY = 18;   // 運賃を算出できない経路(バス絡み)向けのフォールバック
   const TRANSFER_PEN = 4;    // 乗換1回=+4分扱い
+  const MAX_FARE_PEN = 120;  // 換算ペナルティの上限(長距離で運賃差が支配しないように)
+
   function usesPaidJ(j) {
     return j.legs.some(l => l.kind === 'ride' &&
       (D.tripPaid[l.trip] || D.tripShink[l.trip]));
   }
-  function effArr(j) {
-    return j.arr + (usesPaidJ(j) ? PAID_PENALTY : 0) + j.transfers * TRANSFER_PEN;
+  // バスを含む経路は fares.json の対象外で総額が出ない(journeyFareがbusLegsを返す)。
+  // 運賃不明の経路は基準にも入れず、従来どおり固定ペナルティで扱う。
+  function fareOf(j) {
+    let f;
+    try { f = journeyFare(j); } catch (e) { return null; }
+    if (!f || f.busLegs) return null;
+    return (Number.isFinite(f.total) && f.total > 0) ? f.total : null;
   }
+  const fareCache = out.map(fareOf);
+  const knownFares = fareCache.filter(f => f != null);
+  const baseFare = knownFares.length ? Math.min.apply(null, knownFares) : null;
+
+  function farePen(j, i) {
+    const paid = usesPaidJ(j);
+    const f = fareCache[i];
+    if (f == null || baseFare == null) return paid ? PAID_PENALTY : 0;
+    const pen = Math.min((f - baseFare) / YEN_PER_MIN, MAX_FARE_PEN);
+    // 特急料金テーブルに載っていない列車(例: 原ラベルが「箱根登山電車」になっている
+    // 小田急ロマンスカー)は総額に料金が乗らず、換算ペナルティが0になってしまう。
+    // 有料優等は最低でも従来の固定ペナルティを負う、を下限として担保する。
+    return paid ? Math.max(pen, PAID_PENALTY) : pen;
+  }
+  const score = out.map((j, i) => j.arr + j.transfers * TRANSFER_PEN + farePen(j, i));
+  const key = new Map(out.map((j, i) => [j, score[i]]));
+
+  // 比較は必ず推移的にする。旧実装は「Math.abs(差) > 5 なら差で比較、さもなくば
+  // 乗換数で比較」という閾値比較だったため A≈B, B≈C, A<C のような非推移的な順序に
+  // なり、Array#sort の結果が候補の生成順に依存して安定しなかった
+  // (同じ検索条件でも候補の集まり方次第で並びが変わりうる)。
+  // 乗換の重みは既に TRANSFER_PEN としてスコアに入っているので、閾値を設けず
+  // スコアそのもので比較する(同点時のみ副次条件)。これで全順序になる。
   out.sort((a, b) => {
-    const ea = effArr(a), eb = effArr(b);
-    if (Math.abs(ea - eb) > 5) return ea - eb;          // 実効到着が早い方
+    const sa = key.get(a), sb = key.get(b);
+    if (sa !== sb) return sa - sb;                                     // 実効到着が早い方
     if (a.transfers !== b.transfers) return a.transfers - b.transfers; // 乗換少
-    if (Math.abs(b.dep - a.dep) > 5) return b.dep - a.dep; // 遅く出て待たない
-    return a.arr - b.arr;
+    if (a.arr !== b.arr) return a.arr - b.arr;                         // 早く着く方
+    return b.dep - a.dep;                                              // 同着なら遅く出て待たない
   });
   return out.slice(0, 12);   // 多様化で増えた候補のうち上位のみ(junk除去)
 }
