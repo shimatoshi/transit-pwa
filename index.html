@@ -494,26 +494,70 @@ function getDayType() {
 
 // === Data Loading ===
 // 実在列車データ(CSA): trains_v3.bin.gz + meta + graph(駅名) + fares
+//
+// ここのURLは sw.js の DATA と完全に一致していなければならない。?v= を上げるときは
+// 必ず両方を同時に直すこと。ズレると Cache API の照合が外れてオフラインで読めなくなる。
+// (念のため下で CACHE_URLS を送って自己修復もさせている)
+const DATA_URLS = {
+  graph: 'graph_v2.json?v=4',
+  meta:  'trains_v3_meta.json?v=3',
+  fares: 'fares.json?v=10',
+  bin:   'trains_v3.bin.gz?v=3',
+};
+
+// 電波が弱い場所では最初の1回だけ失敗することがよくあるので、少し待って数回試す。
+async function fetchWithRetry(url, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+// r.json() を直に呼ぶと、キャプティブポータルのログインHTMLが返ってきたときに
+// 「Unexpected token '<'」という原因不明のエラーになる。何が起きたか分かる形で落とす。
+async function fetchJson(url) {
+  const res = await fetchWithRetry(url);
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  const text = await res.text();
+  if (ct.includes('text/html') || /^\s*</.test(text)) {
+    throw new Error(`${url}: JSONではなくHTMLが返りました(Wi-Fiのログイン画面かもしれません)`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${url}: データが壊れています`);
+  }
+}
+
 async function fetchBin(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  const res = await fetchWithRetry(url);
   let buf = await res.arrayBuffer();
   const u8 = new Uint8Array(buf);
   if (u8[0] === 0x1f && u8[1] === 0x8b) { // gzip magic → 手動解凍
     const ds = new DecompressionStream('gzip');
     const stream = new Response(buf).body.pipeThrough(ds);
     buf = await new Response(stream).arrayBuffer();
+  } else if (u8[0] === 0x3c) { // '<' で始まる = HTMLが返ってきている
+    throw new Error(`${url}: データではなくHTMLが返りました(Wi-Fiのログイン画面かもしれません)`);
   }
   return buf;
 }
 
-(async () => {
+async function loadData() {
   try {
     const [graphData, meta, fares, bin] = await Promise.all([
-      fetch('graph_v2.json?v=4').then(r => r.json()),
-      fetch('trains_v3_meta.json?v=3').then(r => r.json()),
-      fetch('fares.json?v=10').then(r => r.json()),
-      fetchBin('trains_v3.bin.gz?v=3'),
+      fetchJson(DATA_URLS.graph),
+      fetchJson(DATA_URLS.meta),
+      fetchJson(DATA_URLS.fares),
+      fetchBin(DATA_URLS.bin),
     ]);
     graph = graphData;
     // Pre-build name index for fast search
@@ -547,10 +591,72 @@ async function fetchBin(url) {
     console.log(`CSA loaded: ${RouterV3.data.nConn} connections, ${nTrips} trips`);
     initAutocomplete();
     applyUrlParams();   // 外部アプリ(map-app等)からの ?from=&to=&t=&d= deep-link
+    // SWに実URLを伝えて取りこぼしを埋めさせる。sw.js の DATA と ?v= がズレていても
+    // オンラインで一度開けばここで正しいURLがキャッシュされ、次からオフラインで動く。
+    notifySwOfDataUrls();
   } catch (e) {
-    document.getElementById('status').textContent = 'データ読み込みエラー: ' + e.message;
+    console.error('データ読み込み失敗:', e);
+    showLoadError(e);
   }
-})();
+}
+
+function notifySwOfDataUrls() {
+  const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+  if (!sw) return;
+  sw.postMessage({ type: 'CACHE_URLS', urls: Object.values(DATA_URLS) });
+}
+
+// 読み込みに失敗したまま何も出来なくなるのが一番困るので、必ず復旧手段を出す。
+// 旧実装はエラー文字列を表示するだけで、検索ボタンが無効のまま復旧不能だった。
+function showLoadError(e) {
+  const el = document.getElementById('status');
+  const offline = !navigator.onLine;
+  el.style.color = '#dc2626';
+  el.textContent = offline
+    ? 'オフラインで、保存済みデータが見つかりません。'
+    : 'データ読み込みエラー: ' + e.message;
+
+  const bar = document.createElement('span');
+  bar.style.marginLeft = '8px';
+
+  const retry = document.createElement('button');
+  retry.textContent = '再読み込み';
+  retry.onclick = () => {
+    el.style.color = '';
+    el.textContent = 'データ読み込み中...';
+    bar.remove();
+    loadData();
+  };
+  bar.appendChild(retry);
+
+  // キャッシュが壊れている(HTMLが混入した等)ケースは、取り直さないと直らない。
+  if (navigator.onLine && navigator.serviceWorker && navigator.serviceWorker.controller) {
+    const rebuild = document.createElement('button');
+    rebuild.textContent = 'データを取り直す';
+    rebuild.style.marginLeft = '6px';
+    rebuild.onclick = () => {
+      rebuild.disabled = true;
+      retry.disabled = true;
+      el.textContent = 'データを取り直しています...';
+      const ch = new MessageChannel();
+      ch.port1.onmessage = ev => {
+        bar.remove();
+        el.style.color = '';
+        if (ev.data && ev.data.missing && ev.data.missing.length) {
+          showLoadError(new Error('取得できませんでした: ' + ev.data.missing.join(', ')));
+        } else {
+          loadData();
+        }
+      };
+      navigator.serviceWorker.controller.postMessage(
+        { type: 'RECACHE', urls: Object.values(DATA_URLS) }, [ch.port2]);
+    };
+    bar.appendChild(rebuild);
+  }
+  el.appendChild(bar);
+}
+
+loadData();
 
 // === 出典表示 ===
 // CC BY 4.0 等は「クレジット表示」がライセンス条件なので、同梱した外部データの
@@ -1269,17 +1375,37 @@ if ('serviceWorker' in navigator) {
     });
   }
 
-  // Check offline readiness
+  // 容量不足でキャッシュできなかったらユーザーに知らせる。黙って失敗すると
+  // 「オフライン対応」と表示されたまま実際には動かない状態になる。
+  navigator.serviceWorker.addEventListener('message', ev => {
+    if (ev.data && ev.data.type === 'CACHE_QUOTA_EXCEEDED') {
+      const el = document.getElementById('status');
+      el.textContent = '端末の空き容量が足りず、オフライン用データを保存できませんでした。';
+      el.style.color = '#dc2626';
+    }
+  });
+
+  // オフライン準備状況の確認。
+  // 旧実装は caches.open('transit-v9') を見ていた。キャッシュ名がv40まで進んでいるので
+  // 常に空振りする上、caches.open は無ければ新規作成するので、毎回空のキャッシュを
+  // 作っては次のactivateで消される、という無意味な往復をしていた。
+  // 実際に必要なファイルが揃っているかをSWに直接問い合わせる。
   window.addEventListener('load', async () => {
-    if ('caches' in window) {
-      const cache = await caches.open('transit-v9');
-      const keys = await cache.keys();
+    const sw = navigator.serviceWorker.controller;
+    if (!sw) return; // 初回訪問。まだSWが制御していない
+    const ch = new MessageChannel();
+    ch.port1.onmessage = ev => {
+      const d = ev.data || {};
+      if (d.type !== 'CACHE_STATUS') return;
       const statusEl = document.getElementById('status');
-      if (keys.length >= 4) { // index.html + graph.json + frequency.json + through_service.json minimum
+      if (d.missing && d.missing.length === 0) {
         statusEl.textContent = statusEl.textContent.replace('オフライン対応', 'オフライン準備完了');
         statusEl.style.color = '#16a34a';
+      } else {
+        console.warn('オフライン用に未保存のファイル:', d.missing);
       }
-    }
+    };
+    sw.postMessage({ type: 'CACHE_STATUS' }, [ch.port2]);
   });
 }
 
