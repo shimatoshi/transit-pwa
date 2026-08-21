@@ -27,7 +27,7 @@ import re
 import statistics
 from collections import defaultdict, Counter
 
-BASE = os.path.expanduser('~/transit-pwa')
+BASE = os.path.dirname(os.path.abspath(__file__))
 TRAINS = os.path.join(BASE, 'trains.json')
 OLD_GRAPH = os.path.join(BASE, 'graph.json')
 OUTPUT = os.path.join(BASE, 'graph_v2.json')
@@ -259,7 +259,16 @@ def main():
           f"[express kept: {express_kept}, rare-express dropped: {rare_express_dropped}, "
           f"ghost dropped: {ghost_dropped}]")
 
-    # --- keep biggest connected component ---
+    # --- drop only degenerate (edge-less) nodes, keep every served component ---
+    # Nodes are ekitan station ids, so 長野電鉄長野 and JR長野 are separate nodes
+    # here; the walking transfers that join them are generated later by
+    # make_trains_v3.py. At this stage every minor private railway, monorail and
+    # isolated subway is its own component, so "keep the biggest component"
+    # threw away 40 lines / 514 stations (沖縄モノレール, ライトライン,
+    # 札幌市営地下鉄, ...) — Issue #11. Every component reached this point via
+    # actual train stop sequences, so all of them carry service and all are
+    # kept. Only nodes with no edges at all (cannot appear by construction;
+    # pure safety net) are dropped.
     parent = list(range(len(stations)))
 
     def find(x):
@@ -294,19 +303,22 @@ def main():
     comp = defaultdict(list)
     for i in range(len(stations)):
         comp[find(i)].append(i)
-    biggest = max(comp.values(), key=len)
-    biggest_set = set(biggest)
-    print(f"Components: {len(comp)}, biggest: {len(biggest)} stations")
+    kept_set = {i for members in comp.values() if len(members) >= 2
+                for i in members}
+    sizes = sorted((len(m) for m in comp.values()), reverse=True)
+    print(f"Components: {len(comp)} (sizes: {sizes[:5]}...), "
+          f"kept: {len(kept_set)} stations, "
+          f"dropped isolated nodes: {len(stations) - len(kept_set)}")
 
-    # --- remap to biggest component ---
+    # --- remap to kept nodes ---
     old_to_new = {}
     new_stations = []
-    for old_i in sorted(biggest_set):
+    for old_i in sorted(kept_set):
         old_to_new[old_i] = len(new_stations)
         new_stations.append(stations[old_i])
 
     new_edges = {}
-    for old_i in biggest_set:
+    for old_i in kept_set:
         ni = old_to_new[old_i]
         remapped = [[old_to_new[e[0]], *e[1:]] for e in edges.get(old_i, []) if e[0] in old_to_new]
         if remapped:

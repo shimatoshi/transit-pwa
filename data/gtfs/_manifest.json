@@ -1,20 +1,20 @@
 {
   "toei": {
     "attribution": "東京都交通局・公共交通オープンデータ協議会",
-    "bytes": 8589249,
+    "bytes": 8589169,
     "catalog": "https://ckan.odpt.org/ja/dataset/b_bus_gtfs_jp-toei",
-    "feed_end_date": "20290818",
+    "feed_end_date": "20290820",
     "feed_publisher_name": "東京都交通局",
-    "feed_start_date": "20260819",
-    "feed_version": "20260819_030925",
-    "fetched_at": "2026-08-19T10:15:04+00:00",
+    "feed_start_date": "20260821",
+    "feed_version": "20260821_030938",
+    "fetched_at": "2026-08-21T06:43:42+00:00",
     "file": "toei.zip",
     "license": "CC BY 4.0",
     "license_url": "https://creativecommons.org/licenses/by/4.0/deed.ja",
     "name": "都営バス",
     "operator": "東京都交通局",
     "pref": "東京都",
-    "sha256": "2e7495a95a7067b01dd8efd4c6ad35a9e2acd5f191adc06a5bbaf169a5f42d64",
+    "sha256": "61d7b7222cd040c002a4c4faa7c185b21beca2f4e194a1d5063e007b7903f84b",
     "url": "https://api-public.odpt.org/api/v4/files/Toei/data/ToeiBus-GTFS.zip"
   }
 }
