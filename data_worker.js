@@ -11,7 +11,7 @@
  *   → {type:'error', message}                     失敗。メイン側は自前の経路にフォールバックする
  */
 'use strict';
-importScripts('router_v3.js?v=12');
+importScripts('router_v3.js?v=13');
 
 // index.html と同じ理由のリトライ。電波が弱いと最初の1回だけ落ちることがよくある。
 async function fetchWithRetry(url, attempts = 3) {
