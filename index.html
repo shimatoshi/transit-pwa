@@ -225,6 +225,67 @@ body {
 .mode-btn.on[data-mode="bus"] { background: #2e7d32; border-color: #2e7d32; }
 /* バス限定では特急/新幹線/座席の設定が効かないので触れないようにする */
 .opt-toggles.dim { opacity: .4; pointer-events: none; }
+/* 鉄道のみモードの詳細: 全事業者/JRのみ/私鉄のみ。mode-toggles と同じセグメント型 */
+.rail-toggles { display: flex; gap: 6px; padding: 0 12px 8px; }
+.rail-toggles[hidden] { display: none; }
+.rail-btn {
+  flex: 1;
+  padding: 7px;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+.rail-btn.on { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
+/* 私鉄のみ選択時の事業者絞り込み(検索+スクロール選択) */
+.op-picker { padding: 0 12px 8px; }
+.op-picker[hidden] { display: none; }
+.op-summary {
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: #f8fafc;
+  cursor: pointer;
+}
+.op-summary b { color: var(--text); }
+.op-list-wrap { margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.op-list-wrap[hidden] { display: none; }
+.op-search {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+}
+.op-list { max-height: 220px; overflow-y: auto; }
+.op-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid #f1f5f9;
+}
+.op-item input { accent-color: var(--blue); }
+.op-item .cnt { margin-left: auto; font-size: 11px; color: var(--muted); }
+.op-actions { display: flex; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--border); }
+.op-actions button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
 .search-btn {
   width: 100%;
   padding: 13px;
@@ -446,6 +507,23 @@ body {
     <button type="button" class="mode-btn" data-mode="rail" onclick="setTravelMode('rail')">&#128649; 鉄道のみ</button>
     <button type="button" class="mode-btn" data-mode="bus" onclick="setTravelMode('bus')">&#128652; バスのみ</button>
   </div>
+  <!-- 鉄道のみモードの詳細: JR/私鉄の路線種別と、私鉄の事業者絞り込み -->
+  <div class="rail-toggles" id="rail-toggles" hidden>
+    <button type="button" class="rail-btn on" data-rail="all" onclick="setRailFilter('all')">全事業者</button>
+    <button type="button" class="rail-btn" data-rail="jr" onclick="setRailFilter('jr')">JRのみ</button>
+    <button type="button" class="rail-btn" data-rail="private" onclick="setRailFilter('private')">私鉄のみ</button>
+  </div>
+  <div class="op-picker" id="op-picker" hidden>
+    <div class="op-summary" id="op-summary" onclick="toggleOpList()"></div>
+    <div class="op-list-wrap" id="op-list-wrap" hidden>
+      <input type="text" class="op-search" id="op-search" placeholder="事業者名で検索 (例: 東急)" oninput="renderOpList()">
+      <div class="op-list" id="op-list"></div>
+      <div class="op-actions">
+        <button type="button" onclick="clearOps()">選択解除</button>
+        <button type="button" onclick="toggleOpList()">閉じる</button>
+      </div>
+    </div>
+  </div>
   <div class="opt-toggles" id="opt-toggles">
     <label><input type="checkbox" id="opt-express" checked onchange="saveOpts()"> 特急を使う</label>
     <label><input type="checkbox" id="opt-shinkansen" checked onchange="saveOpts()"> 新幹線を使う</label>
@@ -470,7 +548,7 @@ body {
 <!-- 出典表示。CC BY 系のデータは表示が義務なので trains_v3_meta.json の sources から生成する -->
 <div class="credits" id="credits"></div>
 
-<script src="router_v3.js?v=12"></script>
+<script src="router_v3.js?v=13"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -1012,7 +1090,84 @@ function setTravelMode(mode) {
     if (mode === 'bus') ot.classList.add('dim');
     else ot.classList.remove('dim');
   }
+  updateRailUI();
   saveOpts();
+}
+
+// 鉄道の路線種別: all=全事業者 / jr=JRのみ / private=私鉄のみ(事業者の個別選択可)。
+// 「鉄道のみ」モードの時だけ意味を持つ(すべて/バスのみでは非表示・不使用)
+let railFilter = 'all';
+const RAIL_FILTERS = ['all', 'jr', 'private'];
+let selectedOps = new Set();   // 私鉄で絞り込む事業者名(空 = すべての私鉄)
+
+function setRailFilter(f) {
+  if (RAIL_FILTERS.indexOf(f) < 0) f = 'all';
+  railFilter = f;
+  for (const b of document.querySelectorAll('.rail-btn')) {
+    if (b.dataset.rail === f) b.classList.add('on');
+    else b.classList.remove('on');
+  }
+  updateRailUI();
+  saveOpts();
+}
+function updateRailUI() {
+  const rt = document.getElementById('rail-toggles');
+  const op = document.getElementById('op-picker');
+  const railMode = travelMode === 'rail';
+  if (rt) rt.hidden = !railMode;
+  if (op) op.hidden = !(railMode && railFilter === 'private');
+  if (railMode && railFilter === 'private') renderOpSummary();
+}
+
+// --- 私鉄の事業者選択(検索 or スクロールで選ぶ) ---
+let opListCache = null;   // RouterV3.railOperators() の結果。データロード後に固定
+function opList() {
+  if (!opListCache) {
+    try {
+      if (RouterV3.data && RouterV3.data.lines) opListCache = RouterV3.railOperators();
+    } catch (e) { opListCache = null; }
+  }
+  return opListCache || [];
+}
+function renderOpSummary() {
+  const el = document.getElementById('op-summary');
+  if (!el) return;
+  if (!selectedOps.size) {
+    el.innerHTML = '対象: <b>すべての私鉄</b> <span style="opacity:.7">— タップして会社を絞り込む</span>';
+  } else {
+    const names = Array.from(selectedOps);
+    const head = names.slice(0, 3).join('・');
+    el.innerHTML = `対象: <b>${head}${names.length > 3 ? ` ほか${names.length - 3}社` : ''}</b> <span style="opacity:.7">— タップして変更</span>`;
+  }
+}
+function toggleOpList() {
+  const w = document.getElementById('op-list-wrap');
+  if (!w) return;
+  w.hidden = !w.hidden;
+  if (!w.hidden) renderOpList();
+}
+function renderOpList() {
+  const box = document.getElementById('op-list');
+  if (!box) return;
+  const q = ((document.getElementById('op-search') || {}).value || '').trim();
+  const list = opList();
+  if (!list.length) {
+    box.innerHTML = '<div style="padding:10px;font-size:12px;color:var(--muted)">データ読み込み後に表示されます</div>';
+    return;
+  }
+  const items = q ? list.filter(o => o.name.includes(q)) : list;
+  box.innerHTML = items.map(o =>
+    `<label class="op-item"><input type="checkbox" ${selectedOps.has(o.name) ? 'checked' : ''} onchange="toggleOp(this.dataset.op, this.checked)" data-op="${o.name}">${o.name}<span class="cnt">${o.lines}路線</span></label>`
+  ).join('') || '<div style="padding:10px;font-size:12px;color:var(--muted)">該当する事業者がありません</div>';
+}
+function toggleOp(name, on) {
+  if (on) selectedOps.add(name); else selectedOps.delete(name);
+  renderOpSummary();
+  saveOpts();
+}
+function clearOps() {
+  selectedOps.clear();
+  renderOpList(); renderOpSummary(); saveOpts();
 }
 // 座席種別(指定席/自由席)。運賃の乗車券部分は変わらず特急料金だけが変わるので、
 // 再検索は不要で表示の作り直しだけでよい。
@@ -1034,6 +1189,8 @@ function saveOpts() {
     shinkansen: document.getElementById('opt-shinkansen').checked,
     seat: currentSeat(),
     mode: travelMode,
+    rail: railFilter,
+    ops: Array.from(selectedOps),
   }));
 }
 (function restoreOpts() {
@@ -1042,6 +1199,9 @@ function saveOpts() {
     if (o.express === false) document.getElementById('opt-express').checked = false;
     if (o.shinkansen === false) document.getElementById('opt-shinkansen').checked = false;
     if (o.seat === 'nonreserved') document.getElementById('opt-seat').value = 'nonreserved';
+    // 事業者絞り込みは railFilter より先に戻す(setRailFilter がサマリを描くため)
+    if (Array.isArray(o.ops)) selectedOps = new Set(o.ops.filter(x => typeof x === 'string'));
+    if (RAIL_FILTERS.indexOf(o.rail) >= 0 && o.rail !== 'all') setRailFilter(o.rail);
     // mode 導入前の保存値(bus:false = バスを使わない)からの移行
     const mode = o.mode || (o.bus === false ? 'rail' : null);
     if (mode) setTravelMode(mode);
@@ -1074,6 +1234,14 @@ function applyUrlParams() {
   // ?mode=bus でバス限定の案内に直行できる(map-app の「バスで行く」導線用)
   const mode = (p.get('mode') || '').trim();
   if (TRAVEL_MODES.indexOf(mode) >= 0) setTravelMode(mode);
+  // ?rail=jr|private (&ops=東急,京王) で路線種別/事業者を絞った検索に直行できる
+  const rail = (p.get('rail') || '').trim();
+  if (RAIL_FILTERS.indexOf(rail) >= 0) {
+    setTravelMode('rail');
+    const ops = (p.get('ops') || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (ops.length) selectedOps = new Set(ops);
+    setRailFilter(rail);
+  }
   if (from && to) setTimeout(doSearch, 0);
 }
 
@@ -1128,6 +1296,10 @@ function doSearch() {
     seat: currentSeat(),             // 指定席/自由席(ランキングの運賃換算に効く)
     noBus: travelMode === 'rail',    // 鉄道のみ
     busOnly: travelMode === 'bus',   // バス限定
+    // 路線種別(JR/私鉄)と事業者絞り込み。鉄道のみモードの時だけ効かせる
+    rail: travelMode === 'rail' && railFilter !== 'all' ? railFilter : undefined,
+    operators: travelMode === 'rail' && railFilter === 'private' && selectedOps.size
+      ? Array.from(selectedOps) : undefined,
     day: getDayType(),               // 運転日フィルタ(0平日/1土/2休)
   };
   lastSearchOpts = opts;             // 前の便/次の便で再利用
@@ -1189,6 +1361,10 @@ function doSearch() {
       // バス限定は「そもそも収録範囲外」が最も多いので、そちらのヒントを優先する。
       const offHint = opts.busOnly
         ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">バスのみで検索しています。収録しているのは都営バスだけなので、営業エリア(東京23区と多摩の一部)の外や、駅から停留所への徒歩連絡が無い場所では経路が出ません。「すべて」に戻してお試しください。</div>`
+        : (opts.rail || opts.operators)
+        ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">${
+            opts.operators ? '選択した事業者の路線だけ' : opts.rail === 'jr' ? 'JRの路線だけ' : '私鉄の路線だけ'
+          }で検索しています。この区間は絞り込みの範囲内では乗り継げないようです。「全事業者」に戻すか、選択する会社を増やしてお試しください。</div>`
         : (!opts.express || !opts.shinkansen)
         ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">特急・新幹線をOFFにしています。長距離は各駅停車のみだと日付をまたぐため経路が出ないことがあります。トグルをONにしてお試しください。</div>`
         : overnightHint(waypointCandidates[0][0], waypointCandidates[1][0]);
