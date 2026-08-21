@@ -262,8 +262,11 @@ def main():
     bin_path = os.path.join(BASE, 'trains_v3.bin')
     with open(bin_path, 'wb') as f:
         f.write(buf)
-    with gzip.open(bin_path + '.gz', 'wb', compresslevel=9) as f:
-        f.write(buf)
+    # mtime=0 で固定する。既定だと gzip ヘッダに現在時刻が入り、中身が1バイトも
+    # 変わっていなくても .gz が毎回 diff に出る(4.3MB のノイズコミットになる)。
+    with open(bin_path + '.gz', 'wb') as raw:
+        with gzip.GzipFile(filename='', mode='wb', compresslevel=9, fileobj=raw, mtime=0) as f:
+            f.write(buf)
 
     footpaths = build_footpaths(stations)
     n_mixed = sum(1 for i, j, _ in footpaths
