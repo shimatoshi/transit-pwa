@@ -32,13 +32,20 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 # 関西・中部・九州の大手事業者(大阪シティバス・西鉄バス・神戸市バス・京都市バス等)は
 # 「公共交通データHUBシステム」や ODPT の基本ライセンス(再配布制限あり)、または
 # 利用登録必須で配信されており、ここには載せられない。CC BY/CC0 で認証なし配信の
-# フィードに絞ると、政令市クラスでは北海道中央バス・じょうてつ・名古屋市バスのみが該当し、
-# 関西・九州は地域コミュニティバスが中心になる。
+# フィードに絞ると、政令市クラスでは北海道中央バス・じょうてつ・名古屋市バスのみが該当する。
+#
+# 関西・九州の地域コミュニティバス(gtfs-data.jp経由)は、別ブランチ
+# feat/bus-gtfs-expand が全国規模で網羅的に収録する方針のため、本ブランチでは
+# 重複を避けてここには含めない(北海道中央バス・じょうてつ・名古屋市バスの3社は
+# 同ブランチの収録対象に含まれていなかったため、政令市クラスの空白域を埋める
+# ものとしてこちらに残す)。
 #
 # 'url' 固定URL方式(都営バス/HODA/BODIK)に加え、'gtfs_data_jp' 方式
-# (organization_id, feed_id) を追加。GTFSデータリポジトリ(gtfs-data.jp)は
-# 改正のたびに配布URLの uid が変わる(署名付きS3 URL)ため、fetch 時に API から
-# 現行版(rid=current)の URL を都度解決する。
+# (organization_id, feed_id) にも対応しているが、現状このホワイトリストには
+# 'url' 方式のフィードしかない(gtfs-data.jp 経由の追加は上記理由で見送り)。
+# GTFSデータリポジトリ(gtfs-data.jp)は改正のたびに配布URLの uid が変わる
+# (署名付きS3 URL)ため、'gtfs_data_jp' 方式では fetch 時に API から現行版
+# (rid=current)の URL を都度解決する。
 FEEDS = {
     'toei': {
         'name': '都営バス',
@@ -82,88 +89,6 @@ FEEDS = {
         'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
         'attribution': '名古屋市交通局',
         'pref': '愛知県',
-    },
-    'toyota_oiden': {
-        'name': 'とよたおいでんバス',
-        'operator': '豊田市',
-        'gtfs_data_jp': {'org': 'toyotacity', 'feed': 'kikanbus'},
-        'catalog': 'https://gtfs-data.jp/organizations/toyotacity/feeds/kikanbus',
-        'license': 'CC BY 4.0',
-        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
-        'attribution': '豊田市',
-        'pref': '愛知県',
-    },
-    # ---- 関西(大手は認証なし再配布可のフィードが無いため、兵庫県内のコミュニティバスで代替) ----
-    'nishinomiya_sakura': {
-        'name': 'さくらやまなみバス',
-        'operator': '西宮市',
-        'gtfs_data_jp': {'org': 'nishinomiyacity', 'feed': 'sakurayamanami'},
-        'catalog': 'https://gtfs-data.jp/organizations/nishinomiyacity/feeds/sakurayamanami',
-        'license': 'CC BY 2.1 JP',
-        'license_url': 'https://creativecommons.org/licenses/by/2.1/jp/',
-        'attribution': '西宮市',
-        'pref': '兵庫県',
-    },
-    'akashi_tako': {
-        'name': 'たこバス・たこバスミニ',
-        'operator': '明石市',
-        'gtfs_data_jp': {'org': 'akashicity', 'feed': 'tacobustacobusmini'},
-        'catalog': 'https://gtfs-data.jp/organizations/akashicity/feeds/tacobustacobusmini',
-        'license': 'CC BY 4.0',
-        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
-        'attribution': '明石市',
-        'pref': '兵庫県',
-    },
-    'kakogawa_kako': {
-        'name': 'かこバス・かこバスミニ',
-        'operator': '加古川市',
-        'gtfs_data_jp': {'org': 'kakogawacity', 'feed': 'kakobuskakobusmini'},
-        'catalog': 'https://gtfs-data.jp/organizations/kakogawacity/feeds/kakobuskakobusmini',
-        'license': 'CC BY 2.1 JP',
-        'license_url': 'https://creativecommons.org/licenses/by/2.1/jp/',
-        'attribution': '加古川市',
-        'pref': '兵庫県',
-    },
-    # ---- 九州(西鉄バス・北九州市営バスは認証必須の公共交通HUBシステム配信のため対象外) ----
-    'dazaifu_mahoroba': {
-        'name': 'まほろば号',
-        'operator': '太宰府市',
-        'gtfs_data_jp': {'org': 'dazaifucity', 'feed': 'DazaifuCityCommunityBus'},
-        'catalog': 'https://gtfs-data.jp/organizations/dazaifucity/feeds/DazaifuCityCommunityBus',
-        'license': 'CC BY 4.0',
-        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
-        'attribution': '太宰府市',
-        'pref': '福岡県',
-    },
-    'kasuga_yayoi': {
-        'name': 'コミュニティバスやよい',
-        'operator': '春日市',
-        'gtfs_data_jp': {'org': 'kasugacity', 'feed': 'yayoi_kasuga'},
-        'catalog': 'https://gtfs-data.jp/organizations/kasugacity/feeds/yayoi_kasuga',
-        'license': 'CC BY 4.0',
-        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
-        'attribution': '春日市',
-        'pref': '福岡県',
-    },
-    'munakata_community': {
-        'name': '宗像市コミュニティバス',
-        'operator': '宗像市',
-        'gtfs_data_jp': {'org': 'munakatacity', 'feed': 'MunakataCityCommunityBus'},
-        'catalog': 'https://gtfs-data.jp/organizations/munakatacity/feeds/MunakataCityCommunityBus',
-        'license': 'CC BY 4.0',
-        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
-        'attribution': '宗像市',
-        'pref': '福岡県',
-    },
-    'munakata_fureai': {
-        'name': '宗像市ふれあいバス',
-        'operator': '宗像市',
-        'gtfs_data_jp': {'org': 'munakatacity', 'feed': 'MunakataCityFureaiBus'},
-        'catalog': 'https://gtfs-data.jp/organizations/munakatacity/feeds/MunakataCityFureaiBus',
-        'license': 'CC BY 4.0',
-        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
-        'attribution': '宗像市',
-        'pref': '福岡県',
     },
 }
 
