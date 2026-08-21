@@ -714,19 +714,60 @@ function journeySurcharge(journey, firstCompany, lastCompany) {
   return out;
 }
 
+// === wl(Wikidata路線名)のJR判定 — 実在するＪＲ路線名リストとの照合 (Issue #15) ===
+// wl は事業者接頭辞の無い素の名前(東海道本線・関西空港線)で入るため、ＪＲ接頭辞付き
+// 前提の lineCompany では解決できない。D.lines の全ＪＲ系統が「ＪＲ」始まりである事実
+// (PR #9 の lineOperator と同じデータ検証)を使い、接頭辞を剥がした実体リストを作る。
+
+// 運行系統名(D.lines)からは導出できないが wl に現れる実在のＪＲ名(貨物線・支線・愛称)
+const JR_WL_ALIASES = [
+  '赤羽線', '品鶴線', '山手貨物線', '高島線', '梅田貨物線', '美濃赤坂線',
+  '和田岬線', '海峡線', '利府線', '琵琶湖線', '大和路線', '瀬戸大橋線',
+  '福北ゆたか線', '中央・総武緩行線', 'ガーラ湯沢線',
+];
+// 接頭辞を剥がすと地下鉄路線と同名になるもの。wl が素の「東西線」「中央線」を使うのは
+// 地下鉄側(京都市営・大阪メトロ)で、ＪＲ東西線・ＪＲ中央線の駅は wl にＪＲ接頭辞付きか
+// 「中央本線」等で入るため、bare照合からは除外して誤爆を防ぐ
+const JR_BARE_AMBIGUOUS = ['東西線', '中央線'];
+let _jrBareNames = null, _jrBareFrom = null;
+function jrBareNames() {
+  if (_jrBareNames && _jrBareFrom === D.lines) return _jrBareNames;
+  const set = new Set();
+  for (const name of (D.lines || [])) {
+    const m = name.match(/^(?:ＪＲ|JR)(.+)$/);
+    if (!m) continue;
+    const bare = m[1].replace(/[ 　]/g, '');
+    set.add(bare);
+    // 「京浜東北・根岸線」のような連結系統名は wl では「京浜東北線」「根岸線」で現れる
+    if (bare.includes('・')) {
+      for (let part of bare.split('・')) {
+        if (!part) continue;
+        if (!/線$/.test(part)) part += '線';
+        if (part.length >= 3) set.add(part);
+      }
+    }
+  }
+  for (const a of JR_WL_ALIASES) set.add(a);
+  for (const a of JR_BARE_AMBIGUOUS) set.delete(a);
+  _jrBareNames = set;
+  _jrBareFrom = D.lines;
+  return set;
+}
+// wl の路線名 → 照合キー。区間注記や括弧書きを落とす
+// ('根室本線: 釧路 => 根室' → '根室本線', '東海道本線（美濃赤坂線）' → '東海道本線')
+function isJRBareLine(ln) {
+  if (/^(ＪＲ|JR)/.test(ln)) return true;
+  const key = ln.split(/[:：（(]/)[0].replace(/[ 　]/g, '');
+  if (/新幹線$/.test(key)) return true;   // 新幹線は全社JR(「東海道新幹線」等も素の名前)
+  const jr = jrBareNames();
+  if (jr.has(key)) return true;
+  // 「成田線我孫子支線」「鶴見線海芝浦支線」は本体の「成田線」「鶴見線」で照合
+  const m = key.match(/^(.+線).+支線$/);
+  return !!(m && jr.has(m[1]));
+}
+
 // 駅の所属会社集合 (wl=Wikidata由来の実乗り入れ路線→会社。JR各社は'JR'に丸めて通算扱い)
 // 注意: st.l は直通列車のラベル路線で汚染されている(みなとみらい駅に西武池袋線等)ので使わない
-const JR_BARE_LINE = /線$/;
-// 「空港線$」を一律に私鉄扱いしていたが、事業者名の付く空港線(南海空港線/京急空港線/
-// 名鉄空港線/京成成田空港線/東京モノレール羽田空港線)は lineCompany() が先に解決する
-// ので、この除外が効くのは事業者名の無いものだけ。実際に該当するのは
-// ＪＲ関西空港線・ＪＲ宮崎空港線(どちらもJR)と仙台空港線(仙台空港鉄道)の3つで、
-// JR2つを巻き込んで「関西空港はJRの駅ではない」ことにしていた。
-//
-// 影響: はるか(京都→関西空港)がJR完結なのに、関西空港の会社が南海だけになるため
-// 末端区間が南海運賃で計算され、南海の空港加算運賃¥190まで乗っていた。
-// (JR西日本電特¥840 + 南海¥690 + 南海空港加算¥190 → 正しくはJR通し)
-const PRIVATE_HINT = /鉄道|電鉄|電気軌道|軌道|新交通|モノレール|地下鉄|メトロ|高速|ライナー|エクスプレス|市の|^仙台空港線$/;
 let _stCompanies = null;
 function stationCompanies(stIdx) {
   if (!_stCompanies) _stCompanies = new Map();
@@ -737,11 +778,15 @@ function stationCompanies(stIdx) {
   for (const ln of (st.wl || [])) {
     let c = lineCompany(ln);
     if (!c) {
-      // Wikidataの素の路線名(山手線・東海道本線等)はほぼJR
-      if (/^(ＪＲ|JR)/.test(ln) || (JR_BARE_LINE.test(ln) && !PRIVATE_HINT.test(ln))) c = 'JR';
+      if (isJRBareLine(ln)) c = 'JR';
       else continue;
     } else if (c.startsWith('JR') || /^(ＪＲ|JR)/.test(ln)) {
       c = 'JR';
+    } else if (c === '東京メトロ' && !ln.includes('東京メトロ')) {
+      // canonLine が「東京メトロ」を剥ぐため、京都市営・札幌市営の素の「東西線」「南北線」
+      // も東京メトロに exact 一致してしまう。東京メトロ駅の wl は全て接頭辞付きなので、
+      // 素の名前からの東京メトロ判定は捨てる(該当駅は legC フォールバックで正しく付く)
+      continue;
     }
     cs.add(c);
   }
@@ -1467,6 +1512,7 @@ const RouterV3 = {
   lineCompany,
   lineOperator,
   railOperators,
+  stationCompanies,   // qa_company.js から検査する
   timetable,
   get data() { return D; },
 };
