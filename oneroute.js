@@ -10,10 +10,13 @@ const buf = fs.readFileSync('trains_v3.bin');
 R.loadBinary(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), meta, graph.stations, fares);
 const S = graph.stations;
 
+// 鉄道駅を優先する(同名のバス停が全国にあるため)。--bus で停留所を引く
+const wantBus = process.argv.includes('--bus');
 function id(n) {
-  let i = S.findIndex(s => s.n === n);
-  if (i < 0) i = S.findIndex(s => s.n.startsWith(n + '('));      // 同名は最初の(地名)
-  if (i < 0) { const b = n.replace(/[（(].*?[）)]/g, ''); i = S.findIndex(s => s.n === b || s.n.startsWith(b + '(')); }
+  const ok = s => (wantBus ? !!s.m : !s.m);
+  let i = S.findIndex(s => ok(s) && s.n === n);
+  if (i < 0) i = S.findIndex(s => ok(s) && s.n.startsWith(n + '('));  // 同名は最初の(地名)
+  if (i < 0) { const b = n.replace(/[（(].*?[）)]/g, ''); i = S.findIndex(s => ok(s) && (s.n === b || s.n.startsWith(b + '('))); }
   return i;
 }
 

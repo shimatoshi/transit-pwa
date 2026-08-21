@@ -5,10 +5,16 @@ GTFS-JP (バス) → make_trains_v3.py が食える中間形式へ変換する�
 make_trains_v3.py のバイナリは (station, arr, dep) の停車列でしかなく鉄道固有の
 仮定がないので、GTFS の stop_times.txt をそのまま同じ器に載せられる。本スクリプトは
 
-  1) stops.txt を停留所クラスタへ畳む (parent_station → 正規化名+100m の union-find)
-  2) クラスタを graph_v2.json の stations 末尾へ追記 (m:1 がバス停の目印)
-  3) calendar/calendar_dates を「代表日方式」で評価し 平日/土/休 の3bit へ落とす
-  4) trips/stop_times を bus_trips.json (trains.json 互換の停車列) へ書き出す
+  1) 全フィードの stops.txt をまとめて停留所クラスタへ畳む
+     (parent_station → 正規化名+100m の union-find)
+  2) calendar/calendar_dates を「代表日方式」で評価し 平日/土/休 の3bit へ落とす
+  3) trips/stop_times を bus_trips.json (trains.json 互換の停車列) へ書き出す
+  4) 実際に使われたクラスタだけを graph_v2.json の stations 末尾へ追記 (m:1 が目印)
+
+クラスタリングをフィード横断でやるのは意図的。事業者ごとに畳むと同じ物理停留所が
+事業者の数だけ別の駅として並び、(make_trains_v3.py はバス停どうしの徒歩連絡を
+張らないので)そこでバス→バスの乗り継ぎが不可能になる。全国 500+ フィードでは
+隣接事業者・分割フィード(◯◯バス △△営業所管内 など)の重なりが効いてくる。
 
 代表日方式: GTFS は将来の改正ダイヤ・学休日ダイヤ等を同一フィードに多重収録している。
 特定の1日に有効な service だけを採ると都営バスで stop_times が -36% になる。
@@ -16,9 +22,13 @@ make_trains_v3.py のバイナリは (station, arr, dep) の停車列でしか�
 出現する日」(=通常ダイヤの日)を代表日に選ぶ。祝日や学休日のような少数派の
 パターンは自動的に外れる。
 
+停留所数の上限: 器 (TV3) の停車駅列が uint16 なので鉄道+バスで 65535 が上限。
+カタログ全件は超えるため --max-stops で予算を切り、優先順に詰める(select_feeds)。
+
   python3 gtfs_to_trains.py                          # data/gtfs/ 全フィード
   python3 gtfs_to_trains.py --only toei
   python3 gtfs_to_trains.py --base-date 2026-09-01   # 代表日の探索起点(既定=今日)
+  python3 gtfs_to_trains.py --max-stops 40000        # バス停の予算(既定 55000)
   python3 gtfs_to_trains.py --no-graph               # graph_v2.json を書き換えない
 
 出力:
@@ -28,6 +38,7 @@ make_trains_v3.py のバイナリは (station, arr, dep) の停車列でしか�
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import math
@@ -45,6 +56,8 @@ MERGE_M = 100.0          # 同名停留所を同一クラスタとみなす距�
 WEEKS = 8                # 代表日の候補を探す週数
 ROUTE_TYPE_BUS = '3'
 MAX_SYS_PER_STOP = 6     # 停留所に保持する系統名の上限(駅マスタ肥大の抑制)
+MAX_BUS_STOPS = 55000    # バス停の予算。鉄道 8230 + これで uint16(65535)に約2300の余裕
+PREF_ROUNDS = 3          # 予算配分: 都道府県ごとに上位いくつまでを先に確保するか
 
 
 def haversine_m(la1, lo1, la2, lo2):
@@ -222,7 +235,25 @@ def route_label(r):
 
 # ---------- 本体 ----------
 
-def convert_feed(key, spec, zpath, base_date, log):
+def read_stops(key, z):
+    """stops.txt を読む。stop_id はフィード横断クラスタリングのため key で修飾する
+    (別事業者が同じ stop_id を使うため)"""
+    stops = []
+    for s in read_csv(z, 'stops.txt'):
+        try:
+            la, lo = float(s['stop_lat']), float(s['stop_lon'])
+        except (ValueError, KeyError, TypeError):
+            la = lo = None
+        parent = (s.get('parent_station') or '').strip()
+        stops.append({'id': f'{key}:{s["stop_id"]}', 'name': s.get('stop_name') or '',
+                      'lat': la, 'lon': lo,
+                      'parent': f'{key}:{parent}' if parent else ''})
+    return stops
+
+
+def convert_feed(key, zpath, base_date, stop2cluster, log):
+    """フィード1本を (便, 代表日, 使ったクラスタid集合, クラスタ別の系統名) へ変換する。
+    stop2cluster は全フィードぶんを畳んだ大域の {key:stop_id → cluster id}。"""
     z = zipfile.ZipFile(zpath)
 
     routes = {}
@@ -231,17 +262,6 @@ def convert_feed(key, spec, zpath, base_date, log):
             continue
         routes[r['route_id']] = route_label(r)
     log(f'  routes: {len(routes)} (route_type=3)')
-
-    stops = []
-    for s in read_csv(z, 'stops.txt'):
-        try:
-            la, lo = float(s['stop_lat']), float(s['stop_lon'])
-        except (ValueError, KeyError, TypeError):
-            la = lo = None
-        stops.append({'id': s['stop_id'], 'name': s['stop_name'], 'lat': la, 'lon': lo,
-                      'parent': (s.get('parent_station') or '').strip()})
-    stop2cluster, clusters = cluster_stops(stops)
-    log(f'  stops: {len(stops)} → clusters: {len(clusters)}')
 
     cal = {}
     for r in read_csv(z, 'calendar.txt'):
@@ -286,12 +306,16 @@ def convert_feed(key, spec, zpath, base_date, log):
         i_trip, i_arr, i_dep = ci['trip_id'], ci['arrival_time'], ci['departure_time']
         i_stop, i_seq = ci['stop_id'], ci['stop_sequence']
         i_pu = ci.get('pickup_type')
-        n_rows = n_dropoff_only = 0
+        n_rows = n_dropoff_only = n_broken = 0
         for row in rd:
+            # 列が足りない壊れた行がある(日本中央バス 全線 等)。落として先へ進む
+            if len(row) <= i_seq or len(row) <= i_dep:
+                n_broken += 1
+                continue
             tr = trips.get(row[i_trip])
             if tr is None:
                 continue
-            cl = stop2cluster.get(row[i_stop])
+            cl = stop2cluster.get(f'{key}:{row[i_stop]}')
             if cl is None:
                 continue
             # pickup_type=1(降車専用) は「そこで乗れない」だけで通過はする。器には
@@ -304,6 +328,8 @@ def convert_feed(key, spec, zpath, base_date, log):
                               parse_hhmmss(row[i_arr]), parse_hhmmss(row[i_dep])))
             n_rows += 1
     log(f'  stop_times: {n_rows} (降車専用 {n_dropoff_only} — 乗車可否は器が持てないため無視)')
+    if n_broken:
+        log(f'  skipped {n_broken} 行 (列数が足りない壊れた行)')
 
     # 系統名の停留所別集計(駅マスタの sys 用)
     sysmap = defaultdict(set)
@@ -342,11 +368,69 @@ def convert_feed(key, spec, zpath, base_date, log):
     if dropped:
         log(f'  dropped {dropped} trips (停車2未満)')
 
-    for cid, c in enumerate(clusters):
-        c['sys'] = sorted(sysmap.get(cid, ()))[:MAX_SYS_PER_STOP]
-        c['p'] = spec.get('pref', '')
-        c['src'] = key
-    return clusters, out_trips, rep_meta
+    used = set()
+    for t in out_trips:
+        for st in t['stops']:
+            used.add(st['s'])
+    return out_trips, rep_meta, used, dict(sysmap)
+
+
+# ---------- フィードの取捨選択 ----------
+
+def trip_signature(trips):
+    """同一データが2カタログに出ている(ODPT と gtfs-data.jp の両方に載っている
+    事業者)のを検出するための指紋。停車列そのものではなく便の骨格で取る。"""
+    h = hashlib.sha256()
+    for t in sorted((t['line'], t['dest'], t['cal'], t['stops'][0]['s'],
+                     t['stops'][-1]['s'], t['stops'][0]['d']) for t in trips):
+        h.update(repr(t).encode())
+    return h.hexdigest()
+
+
+def select_feeds(results, manifest, budget, log):
+    """バス停予算 budget に収まるようフィードを選ぶ。
+
+    優先順は「都道府県ごとの便数上位から順に一巡ずつ」。全国どの県にも必ず主要
+    事業者が入り、そのうえで便数の多い(=実用的な路線バスの)フィードが先に入る。
+    PREF_ROUNDS 巡ぶん確保したあとは全国通しの便数順で予算を使い切る。"""
+    bypref = defaultdict(list)
+    for key, r in results.items():
+        bypref[manifest[key].get('pref') or '(不明)'].append(key)
+    for keys in bypref.values():
+        keys.sort(key=lambda k: -len(results[k]['trips']))
+
+    order, seen = [], set()
+    for rnd in range(PREF_ROUNDS):
+        for pref in sorted(bypref):
+            if rnd < len(bypref[pref]):
+                k = bypref[pref][rnd]
+                order.append(k)
+                seen.add(k)
+    rest = [k for k in results if k not in seen]
+    rest.sort(key=lambda k: -len(results[k]['trips']))
+    order += rest
+
+    taken, dropped, used = [], {}, set()
+    sigs = {}
+    for key in order:
+        r = results[key]
+        if not r['trips']:
+            dropped[key] = '代表日に走る便が無い(有効期限切れ / デマンド交通など)'
+            continue
+        sig = trip_signature(r['trips'])
+        if sig in sigs:
+            dropped[key] = f'{sigs[sig]} と同一内容(両カタログに重複公開)'
+            continue
+        if len(used | r['used']) > budget:
+            dropped[key] = (f'バス停予算 {budget} に収まらない '
+                            f'(+{len(r["used"] - used)}停留所)')
+            continue
+        sigs[sig] = key
+        used |= r['used']
+        taken.append(key)
+    log(f'採用 {len(taken)} フィード / 見送り {len(dropped)} フィード '
+        f'(バス停 {len(used)} / 予算 {budget})')
+    return taken, dropped, used
 
 
 def main():
@@ -356,7 +440,9 @@ def main():
     ap.add_argument('--out', default=os.path.join(BASE, 'bus_trips.json'))
     ap.add_argument('--only', action='append')
     ap.add_argument('--base-date', default=None, help='代表日の探索起点 YYYY-MM-DD (既定=今日)')
+    ap.add_argument('--max-stops', type=int, default=MAX_BUS_STOPS, help='バス停の予算')
     ap.add_argument('--no-graph', action='store_true', help='graph_v2.json を書き換えない')
+    ap.add_argument('--verbose', action='store_true', help='フィードごとの内訳を出す')
     args = ap.parse_args()
 
     with open(os.path.join(args.gtfs, '_manifest.json')) as f:
@@ -377,30 +463,80 @@ def main():
     # 鉄道駅 0..n_rail-1 は常に不変)
     del stations[n_rail:]
 
-    all_trips = []
-    feeds_meta = {}
+    # --- 1) 全フィードの停留所をまとめてクラスタへ畳む ---
+    all_stops, feed_stops = [], {}
+    broken = {}
     for key in keys:
+        zpath = os.path.join(args.gtfs, manifest[key]['file'])
+        try:
+            with zipfile.ZipFile(zpath) as z:
+                s = read_stops(key, z)
+        except Exception as e:
+            broken[key] = f'stops.txt を読めない: {e}'
+            continue
+        feed_stops[key] = len(s)
+        all_stops += s
+    stop2cluster, clusters = cluster_stops(all_stops)
+    print(f'stops: {len(all_stops)} ({len(feed_stops)} feeds) → clusters: {len(clusters)}')
+
+    # --- 2) フィードごとに便へ変換 ---
+    results = {}
+    for key in sorted(feed_stops):
         spec = manifest[key]
         zpath = os.path.join(args.gtfs, spec['file'])
-        print(f'[{key}] {spec["name"]} ({spec["license"]})')
-        clusters, trips, rep_days = convert_feed(key, spec, zpath, base_date, lambda s: print(s))
-        offset = len(stations)
-        for c in clusters:
-            stations.append({'n': c['n'], 'la': c['la'], 'lo': c['lo'], 'p': c['p'],
-                             'l': [], 'm': 1, 'sys': c['sys'], 'src': c['src']})
-        for t in trips:
+        log = (lambda s: print(s)) if args.verbose else (lambda s: None)
+        if args.verbose:
+            print(f'[{key}] {spec["name"]} ({spec["license"]})')
+        try:
+            trips, rep_days, used, sysmap = convert_feed(
+                key, zpath, base_date, stop2cluster, log)
+        except Exception as e:
+            broken[key] = f'変換に失敗: {type(e).__name__}: {e}'
+            continue
+        results[key] = {'trips': trips, 'rep': rep_days, 'used': used, 'sys': sysmap}
+    for key, why in sorted(broken.items()):
+        print(f'  !! [{key}] {why}')
+
+    # --- 3) 予算に収まるフィードを選ぶ ---
+    taken, dropped, used_ids = select_feeds(results, manifest, args.max_stops,
+                                            lambda s: print(s))
+
+    # --- 4) 使われたクラスタだけを graph へ。id を詰め直す ---
+    remap = {}
+    pref_of = defaultdict(Counter)
+    sys_of = defaultdict(set)
+    for key in taken:
+        pref = manifest[key].get('pref') or ''
+        for cid, lines in results[key]['sys'].items():
+            if cid in used_ids:
+                sys_of[cid] |= lines
+                if pref:
+                    pref_of[cid][pref] += 1
+    for cid in sorted(used_ids):
+        c = clusters[cid]
+        remap[cid] = len(stations)
+        stations.append({
+            'n': c['n'], 'la': c['la'], 'lo': c['lo'],
+            'p': pref_of[cid].most_common(1)[0][0] if pref_of[cid] else '',
+            'm': 1, 'sys': sorted(sys_of[cid])[:MAX_SYS_PER_STOP],
+        })
+
+    all_trips, feeds_meta = [], {}
+    for key in taken:
+        spec, r = manifest[key], results[key]
+        for t in r['trips']:
             for st in t['stops']:
-                st['s'] += offset
+                st['s'] = remap[st['s']]
             all_trips.append(t)
         feeds_meta[key] = {
             'name': spec['name'], 'operator': spec['operator'],
             'license': spec['license'], 'license_url': spec['license_url'],
             'attribution': spec['attribution'], 'catalog': spec['catalog'],
+            'source': spec.get('source', ''), 'pref': spec.get('pref', ''),
             'feed_version': spec.get('feed_version', ''),
-            'rep_days': rep_days,
-            'stops': len(clusters), 'trips': len(trips),
+            'rep_days': r['rep'],
+            'stops': len(r['used']), 'trips': len(r['trips']),
         }
-        print(f'  → graph stations {offset}..{len(stations) - 1}')
 
     n_bus = len(stations) - n_rail
     n_stop_times = sum(len(t['stops']) for t in all_trips)
@@ -410,6 +546,7 @@ def main():
 
     g['stats'] = dict(g.get('stats') or {})
     g['stats']['bus_stops'] = n_bus
+    g['stats']['bus_feeds'] = len(taken)
     if not args.no_graph:
         with open(args.graph, 'w') as f:
             json.dump(g, f, ensure_ascii=False, separators=(',', ':'))
@@ -422,6 +559,8 @@ def main():
             'rail_stations': n_rail,
             'bus_stops': n_bus,
             'feeds': feeds_meta,
+            # 取り込めなかったフィードと理由。PR/README で説明できるよう残す
+            'skipped': {**broken, **dropped},
         },
         'trips': all_trips,
     }
