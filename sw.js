@@ -33,7 +33,9 @@
 // v44 = 初期ロード短縮(install二段階化・data_worker.js化)の統合。
 // v45 = 特急/新幹線の指定席・自由席の料金差(fares.json に express.seat を追加、?v=11)。
 // v46 = 連結成分プルーニング廃止で40路線514駅を復元(Issue #11。graph/meta/bin 全更新)。
-const VERSION = 'v46';
+// v47 = 駅の読みがな(r)・英字名(e)補完 (#12)。graph_v2、bus再同期で bin/meta も更新。
+//       #11(PR #22) と #12(PR #23) が独立に v46 を名乗ったため、release/v1.1 で v47 に繰り上げた。
+const VERSION = 'v47';
 const CACHE_NAME = `transit-${VERSION}`;
 
 // アプリの外枠。これが無いと起動すらできない。

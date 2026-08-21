@@ -666,7 +666,8 @@ async function loadData() {
       graph._nameIndex.push({
         id: i,
         name: s.n,
-        nameEn: (s.e || '').toLowerCase(),
+        nameEn: foldLatin(s.e || ''),
+        kana: s.r || '',
         pref: s.p,
         // バス停は路線名(l)を持たず系統名(sys)を持つ。路線色ロジックが系統名で
         // 暴発しないようキーを分けてある
@@ -811,20 +812,104 @@ function renderCredits(sources) {
 }
 
 // === Autocomplete ===
+// かな比較用: カタカナをひらがなへ畳む(ひらがな/カタカナどちらでも引けるように)
+function foldKana(s) {
+  let out = '';
+  for (const ch of s) {
+    const c = ch.charCodeAt(0);
+    out += (c >= 0x30A1 && c <= 0x30F6) ? String.fromCharCode(c - 0x60) : ch;
+  }
+  return out;
+}
+// 英字比較用: 小文字化し、長音符号(Tōkyō の ō 等)を素の母音へ畳む
+function foldLatin(s) {
+  return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+// ローマ字→ひらがな変換テーブル(ヘボン式・訓令式の両つづりを受ける)
+const ROMA_TABLE = {
+  a: 'あ', i: 'い', u: 'う', e: 'え', o: 'お',
+  ka: 'か', ki: 'き', ku: 'く', ke: 'け', ko: 'こ',
+  sa: 'さ', si: 'し', shi: 'し', su: 'す', se: 'せ', so: 'そ',
+  ta: 'た', ti: 'ち', chi: 'ち', tu: 'つ', tsu: 'つ', te: 'て', to: 'と',
+  na: 'な', ni: 'に', nu: 'ぬ', ne: 'ね', no: 'の',
+  ha: 'は', hi: 'ひ', hu: 'ふ', fu: 'ふ', he: 'へ', ho: 'ほ',
+  ma: 'ま', mi: 'み', mu: 'む', me: 'め', mo: 'も',
+  ya: 'や', yu: 'ゆ', yo: 'よ',
+  ra: 'ら', ri: 'り', ru: 'る', re: 'れ', ro: 'ろ',
+  wa: 'わ', wo: 'を',
+  ga: 'が', gi: 'ぎ', gu: 'ぐ', ge: 'げ', go: 'ご',
+  za: 'ざ', zi: 'じ', ji: 'じ', zu: 'ず', ze: 'ぜ', zo: 'ぞ',
+  da: 'だ', di: 'ぢ', du: 'づ', de: 'で', do: 'ど',
+  ba: 'ば', bi: 'び', bu: 'ぶ', be: 'べ', bo: 'ぼ',
+  pa: 'ぱ', pi: 'ぴ', pu: 'ぷ', pe: 'ぺ', po: 'ぽ',
+  kya: 'きゃ', kyu: 'きゅ', kyo: 'きょ',
+  sha: 'しゃ', shu: 'しゅ', sho: 'しょ', sya: 'しゃ', syu: 'しゅ', syo: 'しょ',
+  cha: 'ちゃ', chu: 'ちゅ', cho: 'ちょ', tya: 'ちゃ', tyu: 'ちゅ', tyo: 'ちょ',
+  ja: 'じゃ', ju: 'じゅ', jo: 'じょ',
+  jya: 'じゃ', jyu: 'じゅ', jyo: 'じょ', zya: 'じゃ', zyu: 'じゅ', zyo: 'じょ',
+  nya: 'にゃ', nyu: 'にゅ', nyo: 'にょ',
+  hya: 'ひゃ', hyu: 'ひゅ', hyo: 'ひょ',
+  mya: 'みゃ', myu: 'みゅ', myo: 'みょ',
+  rya: 'りゃ', ryu: 'りゅ', ryo: 'りょ',
+  gya: 'ぎゃ', gyu: 'ぎゅ', gyo: 'ぎょ',
+  bya: 'びゃ', byu: 'びゅ', byo: 'びょ',
+  pya: 'ぴゃ', pyu: 'ぴゅ', pyo: 'ぴょ',
+  fa: 'ふぁ', fi: 'ふぃ', fe: 'ふぇ', fo: 'ふぉ',
+  va: 'ゔぁ', vi: 'ゔぃ', vu: 'ゔ', ve: 'ゔぇ', vo: 'ゔぉ',
+  she: 'しぇ', che: 'ちぇ', je: 'じぇ',
+  '-': 'ー',
+};
+// ローマ字入力の未確定文字列をひらがなへ。IME式(toukyou)や途中まで(kitam)でも
+// 駅が引けるようにする。ローマ字として読めない文字列は '' を返す。
+function romaToKana(q) {
+  if (!/^[a-z-]+$/.test(q)) return '';
+  let out = '', i = 0;
+  while (i < q.length) {
+    // 促音: n 以外の子音の連続 (kk, tt, ...)
+    if (i + 1 < q.length && q[i] === q[i + 1] &&
+        'bcdfghjkmpqrstvwyz'.includes(q[i])) {
+      out += 'っ'; i++; continue;
+    }
+    // 撥音: nn / n+子音 / 末尾の n
+    if (q[i] === 'n' && (i + 1 >= q.length || !'aiueoy'.includes(q[i + 1]))) {
+      out += 'ん'; i += (q[i + 1] === 'n') ? 2 : 1; continue;
+    }
+    let hit = '';
+    for (const l of [3, 2, 1]) {
+      const seg = q.slice(i, i + l);
+      if (ROMA_TABLE[seg]) { hit = ROMA_TABLE[seg]; i += l; break; }
+    }
+    if (hit) { out += hit; continue; }
+    // 末尾の打ちかけ子音(kitam の m)は無視。途中で読めなければローマ字ではない
+    return i >= q.length - 2 ? out : '';
+  }
+  return out;
+}
+
 function searchStations(query) {
   if (!graph || query.length < 1) return [];
-  const q = query.toLowerCase();
+  const q = foldLatin(query);      // 英字名(e)との比較用
+  const qKana = foldKana(query);   // かな読み(r)との比較用
+  const qRoma = romaToKana(q);     // ローマ字入力をかなに変換して読みとも比較する
   const results = [];
   // 全マッチを集めてからソート。先頭で打ち切ると完全一致(例:新潟)が
   // 部分一致(新潟大学前/東新潟/X(新潟)…)に押し出されて永久に出ない不具合になる。
   for (const s of graph._nameIndex) {
-    if (s.name.includes(query) || s.nameEn.includes(q)) results.push(s);
+    if (s.name.includes(query) || s.nameEn.includes(q) ||
+        s.kana.includes(qKana) || (qRoma && s.kana.includes(qRoma))) {
+      results.push(s);
+    }
   }
+  // 関連度: 完全一致(2) > 前方一致(1) > 部分一致(0)。表記・英字・かな・ローマ字の
+  // どの経路で当たっても同格に扱う
+  const rank = s =>
+    (s.name === query || s.nameEn === q || s.kana === qKana ||
+     (qRoma && s.kana === qRoma)) ? 2 :
+    (s.name.startsWith(query) || (q && s.nameEn.startsWith(q)) ||
+     s.kana.startsWith(qKana) || (qRoma && s.kana.startsWith(qRoma))) ? 1 : 0;
+  for (const s of results) s._rank = rank(s);
   results.sort((a, b) => {
-    if (a.name === query && b.name !== query) return -1;
-    if (b.name === query && a.name !== query) return 1;
-    if (a.name.startsWith(query) && !b.name.startsWith(query)) return -1;
-    if (b.name.startsWith(query) && !a.name.startsWith(query)) return 1;
+    if (a._rank !== b._rank) return b._rank - a._rank;
     // 同じ関連度なら鉄道駅を上に。バス停は数が多く、駅名サジェストを汚しやすい。
     // バス限定モードのときは探しているのが停留所なので順序を反転する
     if (a.mode !== b.mode) return travelMode === 'bus' ? b.mode - a.mode : a.mode - b.mode;
