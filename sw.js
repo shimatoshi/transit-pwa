@@ -32,7 +32,8 @@
 // v43 = サジェストが到着欄を覆ってフォーカスを奪う不具合の修正(index.html)。
 // v44 = 初期ロード短縮(install二段階化・data_worker.js化)の統合。
 // v45 = 特急/新幹線の指定席・自由席の料金差(fares.json に express.seat を追加、?v=11)。
-const VERSION = 'v45';
+// v46 = 片方向しか収録されていなかった区間の逆方向を再取得(+8,066本、?v=4)。
+const VERSION = 'v46';
 const CACHE_NAME = `transit-${VERSION}`;
 
 // アプリの外枠。これが無いと起動すらできない。
@@ -48,9 +49,9 @@ const SHELL = [
 // これらは常に完全一致でしか返さない (ignoreSearch フォールバックの対象外)。
 const DATA = [
   './graph_v2.json?v=5',
-  './trains_v3_meta.json?v=3',
+  './trains_v3_meta.json?v=4',
   './fares.json?v=11',
-  './trains_v3.bin.gz?v=3',
+  './trains_v3.bin.gz?v=4',
 ];
 
 // 無くても起動はできるもの。取得に失敗しても install を失敗させない。
