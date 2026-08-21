@@ -1728,6 +1728,7 @@ function budgetBannerHtml(routes) {
     background:#f0fdf4;border:1px solid #bbf7d0;color:var(--green);font-size:13px">
     予算${yen(max)}以内の経路 ${within.length}件${
       bySeat.length ? `<span style="color:var(--muted)"> (ほかに自由席なら予算内 ${bySeat.length}件)</span>` : ''}</div>`;
+}
 // のりば表示タグ。plat は "14" / "1・2" 等(platform_match.jsの推定結果)
 function platTag(plat, kind) {
   if (!plat) return '';
