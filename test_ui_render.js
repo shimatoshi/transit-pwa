@@ -34,7 +34,9 @@ const meta = JSON.parse(fs.readFileSync(path.join(BASE, 'trains_v3_meta.json'), 
 const fares = JSON.parse(fs.readFileSync(path.join(BASE, 'fares.json'), 'utf8'));
 const buf = fs.readFileSync(path.join(BASE, 'trains_v3.bin'));
 RouterV3.loadBinary(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), meta, g.stations, fares);
-g._nameIndex = g.stations.map((s, i) => ({ id: i, name: s.n, nameEn: (s.e || '').toLowerCase(),
+g._nameIndex = g.stations.map((s, i) => ({ id: i, name: s.n,
+  nameEn: (s.e || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
+  kana: s.r || '',
   pref: s.p, lines: s.m ? (s.sys || []) : s.l, mode: s.m ? 1 : 0 }));
 __ui.setGraph(g);
 
@@ -149,6 +151,21 @@ t('バス限定モードのサジェストは停留所が上', sugBus.length > 1
 __ui.setTravelMode('all');
 t('all に戻すとサジェストも鉄道駅が上', __ui.searchStations('新橋')[0].mode === 0);
 t('不正なモードは all に落ちる', (__ui.setTravelMode('zzz'), __ui.getTravelMode() === 'all'));
+
+// --- 読みがな・ローマ字検索 (#12) ---
+// 英字名がWikidata欠けだった駅(北見・室蘭等)もローマ字で引ける。かな(ひらがな/
+// カタカナ)、IME式の未確定ローマ字(toukyou)、打ちかけ(kitam)でも引ける。
+const top = q => (__ui.searchStations(q)[0] || {}).name || '(なし)';
+t('ローマ字で北見が引ける', top('kitami') === '北見', top('kitami'));
+t('ひらがなで北見が引ける', top('きたみ') === '北見', top('きたみ'));
+t('カタカナで北見が引ける', top('キタミ') === '北見', top('キタミ'));
+t('打ちかけローマ字(kitam)でも北見が候補に出る',
+  __ui.searchStations('kitam').some(s => s.name === '北見'));
+t('IME式ローマ字(toukyou)で東京が引ける', top('toukyou') === '東京', top('toukyou'));
+t('英語式(tokyo)で東京が引ける', top('tokyo') === '東京', top('tokyo'));
+t('ひらがなで鰺ケ沢が引ける', top('あじがさわ') === '鰺ケ沢', top('あじがさわ'));
+t('長音符号付き英字名(Tōkyō等)も素の母音で引ける', top('shimbashi') === '新橋', top('shimbashi'));
+t('かな検索でも完全一致が前方一致に勝つ', top('しんばし') === '新橋', top('しんばし'));
 
 // --- サジェストが下の入力欄を覆ってフォーカスを奪う不具合の再発防止 ---
 // 候補リストは position:absolute で浮くので、何もしないと出発欄の候補が到着欄や

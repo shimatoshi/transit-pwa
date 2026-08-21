@@ -10,6 +10,7 @@ times.
 
 Output graph_v2.json schema (compatible-ish with graph.json):
   stations: [{n, e, la, lo, p, l, k}]   # k = ekitan station id
+            r(かな読み) と欠落 e は patch_station_readings.py が後段で付与する
   edges:    {idx: [[to_idx, minutes, line], ...]}   # weight is real travel minutes
             express skip edges carry a 4th element: the train type (特急/快速/...)
   lines:    [...]
