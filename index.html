@@ -517,10 +517,10 @@ function getDayType() {
 // この4本は vercel.json で immutable にしてある。中身を差し替えたら ?v= を必ず上げること。
 // 上げ忘れると、ブラウザのHTTPキャッシュが1年間古い方を返し続ける。
 const DATA_URLS = {
-  graph: 'graph_v2.json?v=5',
-  meta:  'trains_v3_meta.json?v=3',
+  graph: 'graph_v2.json?v=6',
+  meta:  'trains_v3_meta.json?v=4',
   fares: 'fares.json?v=11',
-  bin:   'trains_v3.bin.gz?v=3',
+  bin:   'trains_v3.bin.gz?v=4',
 };
 const WORKER_URL = 'data_worker.js?v=1';
 
@@ -797,17 +797,32 @@ function renderCredits(sources) {
   if (!el) return;
   const esc = s => String(s).replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const items = Object.values(sources || {}).map(s => {
+  const all = Object.values(sources || {});
+  if (!all.length) { el.innerHTML = ''; return; }
+  // 300近いフィードを常時ベタ書きすると本文が埋まるので、都道府県ごとに畳んで
+  // <details> に入れる。CC BY の表示義務は「開けば全件見える」で満たす。
+  const line = s => {
     const name = s.catalog
       ? `<a href="${esc(s.catalog)}" target="_blank" rel="noopener">${esc(s.name)}</a>` : esc(s.name);
     const lic = s.license_url
       ? `<a href="${esc(s.license_url)}" target="_blank" rel="noopener">${esc(s.license)}</a>` : esc(s.license);
-    const days = s.rep_days ? Object.entries(s.rep_days).map(([k, v]) => `${k} ${v}`).join(' / ') : '';
-    return `${name}: ${esc(s.attribution)} (${lic})${days ? `<br>ダイヤ基準日 — ${esc(days)}` : ''}`;
-  });
-  el.innerHTML = items.length
-    ? `バスデータ出典 — ${items.join(' ／ ')}<br>バス区間の運賃は計算対象外です。`
-    : '';
+    const days = s.rep_days
+      ? Object.entries(s.rep_days).map(([k, v]) => `${k} ${v}`).join('/') : '';
+    return `${name}: ${esc(s.attribution)} (${lic})` +
+      (days ? ` <span style="opacity:.7">ダイヤ基準日 ${esc(days)}</span>` : '');
+  };
+  const byPref = new Map();
+  for (const s of all) {
+    const p = s.pref || 'その他';
+    if (!byPref.has(p)) byPref.set(p, []);
+    byPref.get(p).push(s);
+  }
+  const groups = [...byPref.entries()].map(([p, ss]) =>
+    `<div><b>${esc(p)}</b> — ${ss.map(line).join(' ／ ')}</div>`).join('');
+  el.innerHTML =
+    `<details><summary>バスデータ出典 — ${all.length}フィード / ${byPref.size}都道府県` +
+    `(CC BY・CC0。クリックで全件)</summary>${groups}</details>` +
+    'バス区間の運賃は計算対象外です。';
 }
 
 // === Autocomplete ===

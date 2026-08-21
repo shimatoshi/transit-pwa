@@ -239,9 +239,11 @@ def main():
                 st_a.append(65535 if s['a'] is None else s['a'] % 1440)
                 st_d.append(65535 if s['d'] is None else s['d'] % 1440)
             offsets.append(len(st_s))
+        feeds = bus['meta']['feeds']
+        prefs = sorted({f.get('pref') or '(不明)' for f in feeds.values()})
         print(f"bus trips: {len(trips_l) - n_rail_trips}, "
               f"stops: {len(st_s) - n_rail_stops} "
-              f"({', '.join(f['name'] for f in bus['meta']['feeds'].values())})")
+              f"({len(feeds)} feeds / {len(prefs)} 都道府県)")
 
     ntrips, nstops = len(trips_l), len(st_s)
     print(f"total trips: {ntrips}, stops: {nstops}")

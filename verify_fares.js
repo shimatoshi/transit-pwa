@@ -14,11 +14,14 @@ const fares = JSON.parse(fs.readFileSync('fares.json', 'utf8'));
 const buf = fs.readFileSync('trains_v3.bin');
 R.loadBinary(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), meta, graph.stations, fares);
 
+// 鉄道駅だけを引く。バス停には鉄道駅と同名のものが全国にあり(「長野」は和歌山県にも
+// ある)、素の名前一致だとそちらを掴む
 const id = n => {
   const strip = s => s.replace(/[（(].*?[）)]/g, '');
-  let i = graph.stations.findIndex(s => s.n === n);
-  if (i < 0) i = graph.stations.findIndex(s => strip(s.n) === strip(n));
-  return i;
+  const rail = graph.stations.map((s, i) => [s, i]).filter(([s]) => !s.m);
+  let e = rail.find(([s]) => s.n === n);
+  if (!e) e = rail.find(([s]) => strip(s.n) === strip(n));
+  return e ? e[1] : -1;
 };
 
 // [from, to, mainCompany, realIC, realKm]
