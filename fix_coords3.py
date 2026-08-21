@@ -64,7 +64,9 @@ def canon_line(s):
 
 def norm(name):
     s = re.sub(r'[（(].*?[)）]', '', name or '')
-    s = re.sub(r'駅$', '', s)
+    # wikidata は路面電車・LRT・モノレールの駅を「◯◯停留場」「◯◯電停」と
+    # 呼ぶ(宇都宮駅東口停留場 等)。駅探側は素の名前なので揃えて剥がす。
+    s = re.sub(r'(駅|停留場|停留所|電停)$', '', s)
     s = unicodedata.normalize('NFKC', s)
     return s.replace('ヶ', 'ケ').replace('ヵ', 'カ')
 
@@ -92,6 +94,44 @@ def hav(la1, lo1, la2, lo2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
+def fill_pass(S, nbr, wd_by_base):
+    """1パス分の補完。埋まった駅は同パス内でも次の駅の anchor になる。
+    戻り値 (filled, skipped)。"""
+    missing = [i for i, s in enumerate(S) if not s.get('m') and s.get('la') is None]
+    filled, skipped = 0, []
+    for i in missing:
+        s = S[i]
+        cands = wd_by_base.get(norm(s['n']), [])
+        if not cands:
+            skipped.append((s['n'], 'wikidataに基準名一致なし'))
+            continue
+        mine = {canon_line(l) for l in (s.get('l') or [])} | {canon_line(l) for l in (s.get('wl') or [])}
+        anchors = [S[j] for j in nbr.get(i, ()) if S[j].get('la') is not None]
+        best, best_ov, best_d = None, -1, None
+        for c in cands:
+            ov = len(mine & {canon_line(l) for l in (c.get('lines') or [])})
+            d = min((hav(c['lat'], c['lon'], a['la'], a['lo']) for a in anchors), default=None)
+            if d is not None and d > NEAR_KM:
+                continue                      # 同名の別地方の駅
+            # 路線重複が多い候補を優先、同点なら隣接駅に近い候補
+            # (那覇空港のように wikidata へ駅と空港施設が同名で並ぶケースの解消)
+            if ov > best_ov or (ov == best_ov and d is not None
+                                and (best_d is None or d < best_d)):
+                best, best_ov, best_d = c, ov, d
+        if best is None:
+            skipped.append((s['n'], f'候補{len(cands)}件すべて隣接駅から{NEAR_KM:.0f}km超 → 同名の別駅'))
+            continue
+        if best_ov < 1 and len(cands) > 1 and best_d is None:
+            skipped.append((s['n'], f'候補{len(cands)}件で路線重複0・地理照合もできず → 曖昧なので補完しない'))
+            continue
+        where = f'隣接駅から{best_d:.1f}km' if best_d is not None else '隣接駅の座標なし'
+        print(f"  {s['n']:16s} ← {best['name']} ({best['lat']:.5f},{best['lon']:.5f}) 路線重複{best_ov} / {where}")
+        s['la'] = round(float(best['lat']), 6)
+        s['lo'] = round(float(best['lon']), 6)
+        filled += 1
+    return filled, skipped
+
+
 def main():
     G = json.load(open(os.path.join(BASE, 'graph_v2.json')))
     W = json.load(open(os.path.join(BASE, 'wikidata_stations.json')))['stations']
@@ -111,39 +151,42 @@ def main():
             nbr.setdefault(a, set()).add(e[0])
             nbr.setdefault(e[0], set()).add(a)
 
-    missing = [i for i, s in enumerate(S) if not s.get('m') and s.get('la') is None]
-    print(f'座標欠損の鉄道駅: {len(missing)}')
+    # --- テレポート座標の検出: 座標を持つ「各停エッジの隣接駅」が全て TELEPORT_KM 超
+    # なら、その駅は同名別地方の駅の座標を掴んでいる(lookup_geo が単一候補を無条件
+    # 採用した等)。座標を捨てて下の wikidata 照合で埋め直す。
+    # 特急スキップエッジ(e[3]あり)は正当に長距離なので判定から除外。
+    TELEPORT_KM = 60.0
+    suspects = []
+    for i, s in enumerate(S):
+        if s.get('m') or s.get('la') is None:
+            continue
+        dists = []
+        for e in G['edges'].get(str(i), []):
+            t = S[e[0]]
+            if len(e) > 3 or t.get('la') is None:
+                continue
+            dists.append(hav(s['la'], s['lo'], t['la'], t['lo']))
+        if dists and min(dists) > TELEPORT_KM:
+            suspects.append(i)
+    for i in suspects:
+        print(f"  テレポート座標を破棄: {S[i]['n']} ({S[i]['la']},{S[i]['lo']})")
+        S[i]['la'] = S[i]['lo'] = None
 
-    filled, skipped = 0, []
-    for i in missing:
-        s = S[i]
-        cands = wd_by_base.get(norm(s['n']), [])
-        if not cands:
-            skipped.append((s['n'], 'wikidataに基準名一致なし'))
-            continue
-        mine = {canon_line(l) for l in (s.get('l') or [])} | {canon_line(l) for l in (s.get('wl') or [])}
-        anchors = [S[j] for j in nbr.get(i, ()) if S[j].get('la') is not None]
-        best, best_ov, best_d = None, -1, None
-        for c in cands:
-            ov = len(mine & {canon_line(l) for l in (c.get('lines') or [])})
-            d = min((hav(c['lat'], c['lon'], a['la'], a['lo']) for a in anchors), default=None)
-            if d is not None and d > NEAR_KM:
-                continue                      # 同名の別地方の駅
-            if ov > best_ov:
-                best, best_ov, best_d = c, ov, d
-        if best is None:
-            skipped.append((s['n'], f'候補{len(cands)}件すべて隣接駅から{NEAR_KM:.0f}km超 → 同名の別駅'))
-            continue
-        if best_ov < 1 and len(cands) > 1 and best_d is None:
-            skipped.append((s['n'], f'候補{len(cands)}件で路線重複0・地理照合もできず → 曖昧なので補完しない'))
-            continue
-        where = f'隣接駅から{best_d:.1f}km' if best_d is not None else '隣接駅の座標なし'
-        print(f"  {s['n']:16s} ← {best['name']} ({best['lat']:.5f},{best['lon']:.5f}) 路線重複{best_ov} / {where}")
-        s['la'] = round(float(best['lat']), 6)
-        s['lo'] = round(float(best['lon']), 6)
-        filled += 1
+    print(f"座標欠損の鉄道駅: {sum(1 for s in S if not s.get('m') and s.get('la') is None)}"
+          f" (うちテレポート破棄 {len(suspects)})")
 
-    print(f'\n補完: {filled}駅 / 未補完: {len(skipped)}駅')
+    # 埋まった駅が隣の駅の anchor になるので、増えなくなるまで繰り返す
+    # (全駅欠損の孤立成分 — 沖縄モノレール等 — は1パス目の「候補1件」駅を
+    #  足がかりに2パス目以降で残りが地理照合で埋まる)
+    total, skipped = 0, []
+    for p in range(1, 6):
+        filled, skipped = fill_pass(S, nbr, wd_by_base)
+        total += filled
+        print(f'-- pass {p}: 補完{filled}駅')
+        if filled == 0:
+            break
+
+    print(f'\n補完: {total}駅 / 未補完: {len(skipped)}駅')
     for n, why in skipped:
         print(f'  - {n}: {why}')
 

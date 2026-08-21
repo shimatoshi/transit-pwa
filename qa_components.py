@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""qa_components.py — build_graph_trains.py の「最大連結成分だけ残す」処理で
-どの路線が丸ごと捨てられているかを検証する(読み取り専用。出力は書かない)。
+"""qa_components.py — trains.json の連結成分を一覧する(読み取り専用。出力は書かない)。
+
+かつて build_graph_trains.py は最大連結成分だけを残し、本線網と徒歩連絡でしか
+繋がらない中小私鉄・モノレール等 40路線514駅 を丸ごと捨てていた (Issue #11)。
+現在は全成分を残すので、本スクリプトは「最大成分以外にどんな独立系統があるか」の
+観察用。ここに列車の走らないゴミ成分が現れたらデータ異常を疑うこと。
 
 Usage: python3 qa_components.py [trains.jsonのパス]
 """
@@ -9,7 +13,8 @@ import os
 import sys
 from collections import defaultdict, Counter
 
-TRAINS = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser('~/transit-pwa/trains.json')
+TRAINS = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'trains.json')
 
 trains = json.load(open(TRAINS))['trains']
 id2name, id2lines = {}, defaultdict(set)
@@ -47,8 +52,8 @@ for k in id2name:
     comp[find(k)].append(k)
 comps = sorted(comp.values(), key=len, reverse=True)
 print(f'駅(ekitan id)数: {len(id2name)}  連結成分: {len(comps)}')
-print(f'最大成分: {len(comps[0])}駅  → build_graph_trains.py はここ以外を全部捨てる')
-print(f'捨てられる駅数: {sum(len(c) for c in comps[1:])}')
+print(f'最大成分: {len(comps[0])}駅  (現在は全成分を graph_v2.json に残す)')
+print(f'最大成分以外の駅数: {sum(len(c) for c in comps[1:])}')
 print()
 trip_count = Counter(t['line'] for t in trains)
 for c in comps[1:]:
