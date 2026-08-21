@@ -517,8 +517,8 @@ function getDayType() {
 // この4本は vercel.json で immutable にしてある。中身を差し替えたら ?v= を必ず上げること。
 // 上げ忘れると、ブラウザのHTTPキャッシュが1年間古い方を返し続ける。
 const DATA_URLS = {
-  graph: 'graph_v2.json?v=5',
-  meta:  'trains_v3_meta.json?v=3',
+  graph: 'graph_v2.json?v=6',
+  meta:  'trains_v3_meta.json?v=4',
   fares: 'fares.json?v=11',
   bin:   'trains_v3.bin.gz?v=3',
 };
@@ -666,6 +666,7 @@ async function loadData() {
       graph._nameIndex.push({
         id: i,
         name: s.n,
+        norm: normName(s.n),      // 全角/半角ゆれを吸収した検索キー(searchStations)
         nameEn: (s.e || '').toLowerCase(),
         pref: s.p,
         // バス停は路線名(l)を持たず系統名(sys)を持つ。路線色ロジックが系統名で
@@ -811,20 +812,33 @@ function renderCredits(sources) {
 }
 
 // === Autocomplete ===
+// 駅名の表記ゆれ吸収。データ側は全角で持っている駅があり(羽田空港第１・第２ターミナル、
+// 成田空港(空港第２ビル)、札幌(ＪＲ)、ＪＲ淡路 ほか鉄道66駅)、素の includes/=== だと
+// 利用者が半角で打った瞬間に0件になる。羽田は「羽田空港第2ターミナル」と打つのが自然で、
+// ?from=羽田空港第2ターミナル のディープリンクも同じ理由で外れていた。
+// 全角英数を半角に畳んで小文字化するだけに留める(この範囲なら別駅どうしが衝突しない
+// ことを全9,901駅で確認済み。かな⇄カナまで畳むと 丸の内/丸ノ内 のような別駅が混ざる)。
+function normName(s) {
+  return (s || '')
+    .replace(/[０-９Ａ-Ｚａ-ｚ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .toLowerCase();
+}
+
 function searchStations(query) {
   if (!graph || query.length < 1) return [];
   const q = query.toLowerCase();
+  const nq = normName(query);
   const results = [];
   // 全マッチを集めてからソート。先頭で打ち切ると完全一致(例:新潟)が
   // 部分一致(新潟大学前/東新潟/X(新潟)…)に押し出されて永久に出ない不具合になる。
   for (const s of graph._nameIndex) {
-    if (s.name.includes(query) || s.nameEn.includes(q)) results.push(s);
+    if (s.norm.includes(nq) || s.nameEn.includes(q)) results.push(s);
   }
   results.sort((a, b) => {
-    if (a.name === query && b.name !== query) return -1;
-    if (b.name === query && a.name !== query) return 1;
-    if (a.name.startsWith(query) && !b.name.startsWith(query)) return -1;
-    if (b.name.startsWith(query) && !a.name.startsWith(query)) return 1;
+    if (a.norm === nq && b.norm !== nq) return -1;
+    if (b.norm === nq && a.norm !== nq) return 1;
+    if (a.norm.startsWith(nq) && !b.norm.startsWith(nq)) return -1;
+    if (b.norm.startsWith(nq) && !a.norm.startsWith(nq)) return 1;
     // 同じ関連度なら鉄道駅を上に。バス停は数が多く、駅名サジェストを汚しやすい。
     // バス限定モードのときは探しているのが停留所なので順序を反転する
     if (a.mode !== b.mode) return travelMode === 'bus' ? b.mode - a.mode : a.mode - b.mode;
@@ -955,12 +969,16 @@ function swapDepArr() {
 
 // Find all station IDs matching a name exactly
 function findAllByName(name) {
-  const strip = s => s.replace(/[（(].*?[）)]/g, '');
+  // normName で全角/半角を畳んでから比較する。データ側が全角の駅(羽田空港第１ターミナル、
+  // 成田空港(空港第２ビル)、ＪＲ淡路 等)は、素の === だと半角入力・ディープリンクで
+  // 一切引けなかった。畳んでも別駅どうしが衝突しないことは全駅で確認済み。
+  const strip = s => normName(s).replace(/[（(].*?[）)]/g, '');
+  const target = normName(name), targetStrip = strip(name);
   const exact = [], loose = [];
   for (let i = 0; i < graph.stations.length; i++) {
     const n = graph.stations[i].n;
-    if (n === name) exact.push(i);
-    else if (strip(n) === strip(name)) loose.push(i);   // 札幌(ＪＲ) 等の括弧サフィックス
+    if (normName(n) === target) exact.push(i);
+    else if (strip(n) === targetStrip) loose.push(i);   // 札幌(ＪＲ) 等の括弧サフィックス
   }
   // 同名の鉄道駅とバス停が両方ある場合(新橋・九段下等 71件)は鉄道駅だけを起終点にする。
   // バス停側へは徒歩連絡で届くので、候補を増やして検索回数を倍にする価値がない。

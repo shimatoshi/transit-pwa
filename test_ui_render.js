@@ -22,7 +22,7 @@ global.RouterV3 = require(path.join(BASE, 'router_v3.js'));
 
 const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
-  '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, ' +
+  '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, normName, ' +
   'overnightHint, setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
   'setSeat, currentSeat, ' +
   'showDropdown, hideDropdown, AC_GAP, ' +
@@ -34,7 +34,10 @@ const meta = JSON.parse(fs.readFileSync(path.join(BASE, 'trains_v3_meta.json'), 
 const fares = JSON.parse(fs.readFileSync(path.join(BASE, 'fares.json'), 'utf8'));
 const buf = fs.readFileSync(path.join(BASE, 'trains_v3.bin'));
 RouterV3.loadBinary(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), meta, g.stations, fares);
-g._nameIndex = g.stations.map((s, i) => ({ id: i, name: s.n, nameEn: (s.e || '').toLowerCase(),
+// norm は index.html 側の normName で作る。ここで別途組み直すと本体と定義がずれる
+// (実際、全角/半角の正規化を入れたときに norm を足し忘れてこのテストだけ落ちた)。
+g._nameIndex = g.stations.map((s, i) => ({ id: i, name: s.n, norm: __ui.normName(s.n),
+  nameEn: (s.e || '').toLowerCase(),
   pref: s.p, lines: s.m ? (s.sys || []) : s.l, mode: s.m ? 1 : 0 }));
 __ui.setGraph(g);
 
@@ -77,6 +80,34 @@ for (const [q, want] of [['大手町', '大手町(東京)'], ['日本橋', '日�
     ids.length > 0 && ids.every(i => !S[i].m) && ids.some(i => S[i].n === want),
     ids.map(i => S[i].n).join('/'));
 }
+
+// 全角/半角の表記ゆれ。データ側が全角で持っている駅(羽田空港第１・第２ターミナル、
+// 成田空港(空港第２ビル)、札幌(ＪＲ)、ＪＲ淡路 ほか鉄道66駅)は、素の includes/=== だと
+// 利用者が半角で打った瞬間に0件になっていた。羽田は半角で打つのが自然な駅名で、
+// ?from=羽田空港第2ターミナル のディープリンクも同じ理由で外れる。
+for (const [q, want] of [
+  ['羽田空港第2ターミナル', '羽田空港第２ターミナル(東京モノレール)'],
+  ['羽田空港第3ターミナル', '羽田空港第３ターミナル(京急)'],
+  ['羽田空港第1・第2ターミナル', '羽田空港第１・第２ターミナル(京急)'],
+  ['成田空港(空港第2ビル)', '成田空港(空港第２ビル)'],
+  ['札幌(JR)', '札幌(ＪＲ)'],
+  ['JR淡路', 'ＪＲ淡路'],
+]) {
+  const ids = __ui.findAllByName(q);
+  t(`半角入力「${q}」が全角の駅名に解決される`,
+    ids.length > 0 && ids.some(i => S[i].n === want),
+    ids.map(i => S[i].n).join('/') || '(0件)');
+  const sg = __ui.searchStations(q);
+  t(`半角入力「${q}」がサジェストに出る`,
+    sg.length > 0 && sg.some(s => s.name === want),
+    sg.slice(0, 3).map(s => s.name).join('/') || '(0件)');
+}
+// 全角のまま打っても従来通り引ける(正規化で壊していないこと)
+t('全角のまま「羽田空港第２ターミナル」も引ける',
+  __ui.findAllByName('羽田空港第２ターミナル(東京モノレール)').length > 0);
+// 畳みすぎて別駅を巻き込んでいないこと
+t('「丸の内」と「丸ノ内」は別駅のまま',
+  !__ui.findAllByName('丸の内').some(i => S[i].n.includes('丸ノ内')));
 
 // --- 1日で着かない超長距離の「経路なし」ヒント ---
 // 稚内→博多 等は当日中の列車では到達できず必ず経路なしになる。素の「見つかりません」だと
