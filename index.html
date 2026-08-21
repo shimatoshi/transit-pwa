@@ -470,6 +470,7 @@ body {
 <!-- 出典表示。CC BY 系のデータは表示が義務なので trains_v3_meta.json の sources から生成する -->
 <div class="credits" id="credits"></div>
 
+<script src="platform_match.js?v=1"></script>
 <script src="router_v3.js?v=12"></script>
 <script>
 // === Global State ===
@@ -523,6 +524,9 @@ const DATA_URLS = {
   bin:   'trains_v3.bin.gz?v=3',
 };
 const WORKER_URL = 'data_worker.js?v=1';
+// のりば(ホーム番線)データ。無くても検索は動くので遅延ロード(失敗しても無視)
+const PLATFORMS_URL = 'platforms.json?v=1';
+let platformData = null;
 
 // 起動の各段階に印を付ける。bench_load.js がこれを読んで内訳を出す。
 // 本番でも DevTools の Performance に出るので、遅いときの切り分けに使える。
@@ -713,6 +717,10 @@ async function loadData() {
     perfMark('searchable');
     console.log(`CSA loaded: ${RouterV3.data.nConn} connections, ${nTrips} trips`);
     initAutocomplete();
+    // のりばデータは検索可能になった後に取りに行く(初期ロードをブロックしない)
+    fetchJson(PLATFORMS_URL)
+      .then(d => { platformData = d; })
+      .catch(e => console.warn('のりばデータを読み込めませんでした:', e));
     applyUrlParams();   // 外部アプリ(map-app等)からの ?from=&to=&t=&d= deep-link
     // SWに実URLを伝えて取りこぼしを埋めさせる。sw.js の DATA と ?v= がズレていても
     // オンラインで一度開けばここで正しいURLがキャッシュされ、次からオフラインで動く。
@@ -731,7 +739,7 @@ async function loadData() {
 // SW側は「ページが取り終わったあとに」HTTPキャッシュから拾い直すだけで済む。
 function notifySwOfDataUrls() {
   if (!navigator.serviceWorker) return;
-  const urls = Object.values(DATA_URLS);
+  const urls = Object.values(DATA_URLS).concat([PLATFORMS_URL]);
   const send = sw => sw && sw.postMessage({ type: 'CACHE_URLS', urls });
   if (navigator.serviceWorker.controller) { send(navigator.serviceWorker.controller); return; }
   navigator.serviceWorker.ready.then(reg => send(reg.active)).catch(() => {});
@@ -1263,8 +1271,20 @@ function lineColor(name) {
 function legColor(l) { return l.mode === 1 ? BUS_COLOR : lineColor(dl(l)); }
 const isBusLeg = l => l.mode === 1;
 
+// のりば表示タグ。plat は "14" / "1・2" 等(platform_match.jsの推定結果)
+function platTag(plat, kind) {
+  if (!plat) return '';
+  const label = (typeof PlatformMatch !== 'undefined' ? PlatformMatch.formatTrack(plat) : plat + '番線');
+  const color = kind === 'dep' ? 'var(--blue)' : 'var(--muted)';
+  return ` <span style="font-size:11px;font-weight:600;color:${color};background:#f1f5f9;border-radius:4px;padding:1px 5px;white-space:nowrap">${label}${kind === 'dep' ? '発' : '着'}</span>`;
+}
+
 // === Rendering (journey = RouterV3.findJourneys の結果) ===
 function renderOneRoute(j, index) {
+  // のりばデータが読み込み済みなら各legに乗車/降車ホームを付与
+  if (platformData && RouterV3.attachPlatforms) {
+    try { RouterV3.attachPlatforms(j, platformData); } catch (e) { console.warn('のりば付与失敗:', e); }
+  }
   const depStr = formatTime(j.dep);
   const arrStr = formatTime(j.arr);
   const totalMin = j.arr - j.dep;
@@ -1333,6 +1353,7 @@ function renderOneRoute(j, index) {
   html += `<div class="route-detail${collapsed}" id="${routeId}">`;
 
   let prevArr = null;
+  let pendingArrPlat = null;   // 直前のride legの降車ホーム(次の駅名表示に添える)
   for (let li = 0; li < j.legs.length; li++) {
     const leg = j.legs[li];
     if (leg.kind === 'walk') {
@@ -1340,10 +1361,11 @@ function renderOneRoute(j, index) {
       html += `<div class="step">
         <div class="step-line"><div class="step-dot walk"></div><div class="step-bar walk"></div></div>
         <div class="step-content">
-          <div class="step-station" style="font-size:13px">${fn} → ${tn}</div>
+          <div class="step-station" style="font-size:13px">${fn}${platTag(pendingArrPlat, 'arr')} → ${tn}</div>
           <div class="step-info">徒歩 約${leg.min}分</div>
         </div>
       </div>`;
+      pendingArrPlat = null;
       if (prevArr != null) prevArr += leg.min;
       continue;
     }
@@ -1376,7 +1398,7 @@ function renderOneRoute(j, index) {
         <div class="step-bar" style="background:${color}"></div>
       </div>
       <div class="step-content">
-        <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${formatTime(leg.dep)}</span>${fromStn.n}</div>
+        <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${formatTime(leg.dep)}</span>${fromStn.n}${platTag(pendingArrPlat, 'arr')}${platTag(leg.depPlat, 'dep')}</div>
         <div class="step-info">
           <span class="line-tag" style="background:${color}11;color:${color}">${bus ? '&#128652; ' : ''}${dl(leg)}</span>
           ${leg.type ? `<span style="font-size:11px;color:var(--orange);font-weight:600">${leg.type}</span>` : ''}
@@ -1387,13 +1409,14 @@ function renderOneRoute(j, index) {
       </div>
     </div>`;
     prevArr = leg.arr;
+    pendingArrPlat = leg.arrPlat || null;
   }
   const lastLeg = j.legs[j.legs.length - 1];
   const goalStn = graph.stations[lastLeg.to];
   html += `<div class="step">
     <div class="step-line"><div class="step-dot end"></div><div class="step-bar none"></div></div>
     <div class="step-content">
-      <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${formatTime(j.arr)}</span>${goalStn.n}</div>
+      <div class="step-station"><span style="color:var(--muted);font-size:12px;margin-right:6px">${formatTime(j.arr)}</span>${goalStn.n}${platTag(pendingArrPlat, 'arr')}</div>
       <div class="step-info">到着</div>
     </div>
   </div>`;

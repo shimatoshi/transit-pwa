@@ -1232,6 +1232,46 @@ function timetable(stIdx, opts) {
   });
 }
 
+// === のりば(ホーム番線)付与 ===
+// platform_match.js が読み込まれていれば、経路の各乗車legに
+// depPlat(乗車ホーム)/arrPlat(降車ホーム)を付与する。データが無い駅はnull。
+function platformMatcher() {
+  if (typeof PlatformMatch !== 'undefined') return PlatformMatch;
+  if (typeof module !== 'undefined' && module.exports) {
+    try { return require('./platform_match.js'); } catch (e) { /* optional */ }
+  }
+  return null;
+}
+
+// platforms: platforms.json の中身 ({駅名: [{t,line,dir,dest,type,op}]})
+function attachPlatforms(journey, platforms) {
+  const pm = platformMatcher();
+  if (!pm || !platforms || !journey || !journey.legs) return journey;
+  const name = i => (D.stations[i] && D.stations[i].n) || '';
+  for (const leg of journey.legs) {
+    if (leg.kind !== 'ride' || leg.mode === 1) continue; // バスはのりば対象外
+    const stops = leg.stops.map(s => name(s.st));
+    const fromN = stops[0], toN = stops[stops.length - 1];
+    // 進行方向ヒント: 乗車後の停車駅と列車の行先
+    const aheadBoard = stops.slice(1);
+    if (leg.dest) aheadBoard.push(leg.dest);
+    // 降車駅では「この先(行先)」を正、「来た方向(手前の停車駅)」を負のヒントに
+    const aheadAlight = (leg.dest && leg.dest !== toN) ? [leg.dest] : [];
+    const behindAlight = stops.slice(0, -1);
+    // 表示名(lineLabel)を優先し、だめなら原ラベルで再試行
+    const tryLines = leg.lineLabel && leg.lineLabel !== leg.line
+      ? [leg.lineLabel, leg.line] : [leg.line];
+    let dep = null, arr = null;
+    for (const ln of tryLines) {
+      if (!dep) dep = pm.matchPlatform(platforms[fromN], ln, aheadBoard, leg.type);
+      if (!arr) arr = pm.matchPlatform(platforms[toN], ln, aheadAlight, leg.type, behindAlight);
+    }
+    leg.depPlat = dep ? dep.t : null;
+    leg.arrPlat = arr ? arr.t : null;
+  }
+  return journey;
+}
+
 const RouterV3 = {
   loadBinary,
   buildConnections,
@@ -1248,6 +1288,7 @@ const RouterV3 = {
   haversineKm,
   lineCompany,
   timetable,
+  attachPlatforms,
   get data() { return D; },
 };
 

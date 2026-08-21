@@ -24,7 +24,7 @@ const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
   '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, ' +
   'overnightHint, setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
-  'setSeat, currentSeat, ' +
+  'setSeat, currentSeat, setPlatforms: p => { platformData = p; }, ' +
   'showDropdown, hideDropdown, AC_GAP, ' +
   'setGraph: g => { graph = g; } };';
 vm.runInThisContext(src, { filename: 'index.html:inline' });
@@ -60,6 +60,42 @@ const hr = __ui.renderOneRoute(jr, 0);
 t('鉄道のみの経路カードにバス表記が出ない',
   !hr.includes('&#128652;') && !hr.includes('バス運賃別途') && !/停留所/.test(hr));
 t('鉄道カードに undefined が無い', !/undefined/.test(hr));
+
+// --- のりば(ホーム番線)表示 ---
+// platforms.json があれば、乗車駅に「N番線発」、降車駅に「N番線着」が付く。
+// データが無い駅では何も出ない(「不明」等のノイズを出さない)。
+{
+  const platforms = JSON.parse(fs.readFileSync(path.join(BASE, 'platforms.json'), 'utf8'));
+  __ui.setPlatforms(platforms);
+  // 新宿→渋谷: JR線(山手/埼京/湘南新宿)はどれもホーム番線データがある
+  const jp = RouterV3.findJourneys(rid('新宿'), rid('渋谷'), 600, { day: 0 })[0];
+  t('新宿→渋谷の経路が出る', !!jp);
+  const hp = __ui.renderOneRoute(jp, 0);
+  t('のりば表示(番線発/番線着)が出る', /番線発/.test(hp) || /番線着/.test(hp),
+    (hp.match(/[\d・〜-]+番線[発着]/g) || []).join(', '));
+  t('のりばカードに undefined が無い', !/undefined/.test(hp));
+  // 山手線 新宿→渋谷(内回り)は 14番線発 → 2番線着 のはず
+  const jy = (() => {
+    for (const at of [600, 630, 660]) {
+      for (const cand of RouterV3.findJourneys(rid('新宿'), rid('渋谷'), at, { day: 0 })) {
+        const r = cand.legs.filter(l => l.kind === 'ride');
+        if (r.length === 1 && (r[0].lineLabel || r[0].line).includes('山手線')) return cand;
+      }
+    }
+    return null;
+  })();
+  if (jy) {
+    const hy = __ui.renderOneRoute(jy, 0);
+    t('山手線内回り 新宿は14番線発', hy.includes('14番線発'), (hy.match(/[\d・〜-]+番線[発着]/g) || []).join(', '));
+    t('山手線内回り 渋谷は2番線着', hy.includes('2番線着'), (hy.match(/[\d・〜-]+番線[発着]/g) || []).join(', '));
+  } else {
+    t('山手線単独経路が見つかる(スキップ)', true, '経路なしのためスキップ');
+  }
+  // データの無い駅(バス停等)では何も出ない: バス経路カードにのりば表示が混ざらない
+  const hb2 = __ui.renderOneRoute(RouterV3.query(rid('新橋'), bid('晴海三丁目'), 600, { day: 0 }), 0);
+  t('バスlegにのりば表示が出ない', !/番線[発着]/.test(hb2));
+  __ui.setPlatforms(null);
+}
 
 const sug = __ui.searchStations('新橋');
 t('サジェストで鉄道駅がバス停より上', sug.length > 1 && sug[0].mode === 0,
