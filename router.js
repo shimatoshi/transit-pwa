@@ -490,7 +490,10 @@ function lineCompany(line) {
   if (!_companyCanon) {
     _companyCanon = {};
     for (const [company, data] of Object.entries(D.fares.companies)) {
-      for (const name of data.match) {
+      // match を持たない会社がある(距離制運賃だけ定義して路線名の列挙は
+      // router_v3 側の会社判定に任せているもの)。無条件に回すと TypeError で
+      // 運賃計算ごと落ちるので、無ければ空扱いにする。
+      for (const name of data.match || []) {
         _companyCanon[canonLine(name)] = company;
       }
     }

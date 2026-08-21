@@ -130,6 +130,8 @@ def dist2(a, b):
 
 
 HAS_KANA = re.compile(r'[ぁ-ゖ]')
+# 異体字セレクタ (SVS: U+FE00-FE0F / IVS: U+E0100-U+E01EF)
+VARIATION_SELECTOR = re.compile(r'[︀-️\U000E0100-\U000E01EF]')
 
 
 def main():
@@ -195,8 +197,17 @@ def main():
             if kks is None:
                 import pykakasi
                 kks = pykakasi.kakasi()
-            base_name = re.sub(r'[（(].*?[)）]$', '', s['n'])
-            hira = ''.join(w['hira'] for w in kks.convert(base_name))
+            # バス停には「(仮)」「（旧）」だけの名前があり、カッコを剥がすと空になる。
+            # pykakasi は空文字で IndexError を投げるので、剥がして空なら元の名前を使う。
+            base_name = re.sub(r'[（(].*?[)）]$', '', s['n']) or s['n']
+            # GTFS のバス停名には異体字セレクタ付きの字がある(名古屋市バス「高辻󠄀」=
+            # 辻+U+E0100)。pykakasi はこれを食うと IndexError で落ちるので剥がす。
+            base_name = VARIATION_SELECTOR.sub('', base_name)
+            try:
+                hira = ''.join(w['hira'] for w in kks.convert(base_name)) if base_name else ''
+            except Exception:
+                # 読みが1件作れないだけで全体のビルドを止める価値はない
+                hira = ''
             hira = kata_to_hira(hira)
             if HAS_KANA.search(hira):
                 s['r'] = hira

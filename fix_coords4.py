@@ -69,8 +69,12 @@ for k, lst in graph['edges'].items():
         adj.setdefault(i, set()).add(j)
         adj.setdefault(j, set()).add(i)
 
+# 対象は鉄道駅のみ。バス停(m=1)には「立花」「新田」のような同名の停留所が
+# いくらでもあり、それらまで数えると「該当3件」で中止してしまう。
 byname = {}
 for i, s in enumerate(stations):
+    if s.get('m'):
+        continue
     byname.setdefault(s['n'], []).append(i)
 
 changed = []

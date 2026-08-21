@@ -655,12 +655,12 @@ function getDayType() {
 // この4本は vercel.json で immutable にしてある。中身を差し替えたら ?v= を必ず上げること。
 // 上げ忘れると、ブラウザのHTTPキャッシュが1年間古い方を返し続ける。
 const DATA_URLS = {
-  graph: 'graph_v2.json?v=7',
-  meta:  'trains_v3_meta.json?v=5',
+  graph: 'graph_v2.json?v=8',
+  meta:  'trains_v3_meta.json?v=6',
   fares: 'fares.json?v=11',
-  bin:   'trains_v3.bin.gz?v=5',
+  bin:   'trains_v3.bin.gz?v=6',
 };
-const WORKER_URL = 'data_worker.js?v=3';
+const WORKER_URL = 'data_worker.js?v=4';
 // のりば(ホーム番線)データ。無くても検索は動くので遅延ロード(失敗しても無視)
 const PLATFORMS_URL = 'platforms.json?v=1';
 let platformData = null;
@@ -1728,6 +1728,8 @@ function budgetBannerHtml(routes) {
     background:#f0fdf4;border:1px solid #bbf7d0;color:var(--green);font-size:13px">
     予算${yen(max)}以内の経路 ${within.length}件${
       bySeat.length ? `<span style="color:var(--muted)"> (ほかに自由席なら予算内 ${bySeat.length}件)</span>` : ''}</div>`;
+}
+
 // のりば表示タグ。plat は "14" / "1・2" 等(platform_match.jsの推定結果)
 function platTag(plat, kind) {
   if (!plat) return '';

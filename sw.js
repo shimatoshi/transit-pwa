@@ -57,7 +57,12 @@
 //       PR #20 も独立に v46 を名乗っていたため v55 に繰り上げた。
 // v56 = 複数日ロールオーバー探索(宿泊を挟む超長距離、data_worker.js ?v=2)。
 //       PR #26 も独立に v46 を名乗っていたため v56 に繰り上げた。
-const VERSION = 'v56';
+// v57 = v1.1 の13PRをマージした状態から、ビルドパイプラインを通しで回してデータを再生成。
+//       バスGTFSが 1事業者(都営) → 242フィード/41都道府県 に増え、鉄道も
+//       PR #22(連結成分復元)/#27(逆方向補完)/#21(運転日タグ)の結果が初めて反映される。
+//       graph_v2.json ?v=8 / trains_v3_meta.json ?v=6 / trains_v3.bin.gz ?v=6 /
+//       data_worker.js ?v=4 (importScripts の router_v3.js を ?v=14 へ揃えた)。
+const VERSION = 'v57';
 const CACHE_NAME = `transit-${VERSION}`;
 
 // アプリの外枠。これが無いと起動すらできない。
@@ -66,17 +71,17 @@ const SHELL = [
   './index.html',
   './router_v3.js?v=14',
   './platform_match.js?v=1',
-  './data_worker.js?v=3',
+  './data_worker.js?v=4',
   './manifest.json',
 ];
 
 // 大きい実データ。壊れた/古いものを混ぜて配ると誤った時刻を表示しかねないので、
 // これらは常に完全一致でしか返さない (ignoreSearch フォールバックの対象外)。
 const DATA = [
-  './graph_v2.json?v=7',
-  './trains_v3_meta.json?v=5',
+  './graph_v2.json?v=8',
+  './trains_v3_meta.json?v=6',
   './fares.json?v=11',
-  './trains_v3.bin.gz?v=5',
+  './trains_v3.bin.gz?v=6',
 ];
 
 // 無くても起動はできるもの。取得に失敗しても install を失敗させない。
