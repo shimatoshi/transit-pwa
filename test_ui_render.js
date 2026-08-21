@@ -24,7 +24,7 @@ const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
   '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, ' +
   'overnightHint, setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
-  'setSeat, currentSeat, ' +
+  'setSeat, currentSeat, currentBudget, budgetTagHtml, budgetBannerHtml, ' +
   'showDropdown, hideDropdown, AC_GAP, ' +
   'setGraph: g => { graph = g; } };';
 vm.runInThisContext(src, { filename: 'index.html:inline' });
@@ -149,6 +149,56 @@ t('バス限定モードのサジェストは停留所が上', sugBus.length > 1
 __ui.setTravelMode('all');
 t('all に戻すとサジェストも鉄道駅が上', __ui.searchStations('新橋')[0].mode === 0);
 t('不正なモードは all に落ちる', (__ui.setTravelMode('zzz'), __ui.getTravelMode() === 'all'));
+
+// --- 予算(運賃上限) ---
+// 予算欄の解釈と、経路カード/バナーの予算表示。
+const budgetEl = document.getElementById('opt-budget');
+const setBudgetValue = v => { budgetEl.value = v; };
+t('予算欄が空なら上限なし(null)', (setBudgetValue(''), __ui.currentBudget() === null));
+t('予算欄の0は上限なし扱い', (setBudgetValue('0'), __ui.currentBudget() === null));
+t('予算欄の数値を円として読む', (setBudgetValue('3000'), __ui.currentBudget() === 3000));
+t('「¥1,500」のような入力も数値として読む',
+  (setBudgetValue('¥1,500'), __ui.currentBudget() === 1500));
+setBudgetValue('');
+
+const jt = RouterV3.query(rid('柏'), rid('東京'), 540, { day: 0 });
+const fareT = RouterV3.journeyFare(jt, { seat: 'reserved' });
+const withBudget = (j, max) => (RouterV3.annotateBudget(j, { maxFare: max }), j);
+const tagOf = (j, max) => __ui.budgetTagHtml(withBudget(j, max), RouterV3.journeyFare(j, { seat: __ui.currentSeat() }));
+t('予算未指定なら予算表示は出ない', __ui.budgetTagHtml({}, fareT) === '');
+t('予算内なら残額つきで「予算内」', /予算内 \(残り¥\d+\)/.test(tagOf(jt, fareT.total + 100)),
+  tagOf(jt, fareT.total + 100));
+t('予算超過なら不足額つきで「予算超過」',
+  /予算超過 \+¥\d+/.test(tagOf(jt, fareT.total - 100)), tagOf(jt, fareT.total - 100));
+t('予算ちょうどは予算内', /予算内/.test(tagOf(jt, fareT.total)));
+
+// 指定席では超過・自由席なら収まる経路は「安い席種なら予算内」
+const fnR2 = RouterV3.journeyFare(jn, { seat: 'reserved' });
+const fnN2 = RouterV3.journeyFare(jn, { seat: 'nonreserved' });
+const midBudget = Math.floor((fnR2.total + fnN2.total) / 2);
+t('指定席超過・自由席なら予算内のときは席種の案内が出る',
+  /安い席種なら予算内 ¥[\d,]+/.test(tagOf(jn, midBudget)), tagOf(jn, midBudget));
+
+// バス絡みは鉄道運賃しか出せないので「予算内」と言い切らない
+t('運賃を出せない経路は「予算判定不可」',
+  /予算判定不可/.test(__ui.budgetTagHtml(withBudget(jb, 200), RouterV3.journeyFare(jb, {}))));
+
+const banner = routes => __ui.budgetBannerHtml(routes);
+t('予算未指定ならバナーを出さない', banner([{}, {}]) === '');
+t('予算内が1件でもあれば件数バナー',
+  /予算¥1,000以内の経路 1件/.test(banner([withBudget(jt, 1000)])), banner([withBudget(jt, 1000)]));
+t('席種を変えれば収まる分は「予算内◯件」に混ぜず別に数える',
+  /自由席を選んだ場合の1件/.test(banner([withBudget(jn, midBudget)])), banner([withBudget(jn, midBudget)]));
+t('予算内が皆無なら最安と不足額を出すバナー',
+  /予算¥100以内の経路は見つかりませんでした。最安は¥[\d,]+\(\+¥[\d,]+\)/.test(banner([withBudget(jt, 100)])),
+  banner([withBudget(jt, 100)]));
+t('予算表示に undefined が無い',
+  !/undefined/.test(tagOf(jt, 1000) + tagOf(jt, 100) + banner([withBudget(jt, 100)])));
+
+t('経路カードに予算表示が入る',
+  /予算内/.test(__ui.renderOneRoute(withBudget(jt, fareT.total + 100), 0)));
+t('予算未指定の経路カードには予算表示を入れない',
+  !/予算/.test(__ui.renderOneRoute(RouterV3.annotateBudget(jt, {}), 0)));
 
 // --- サジェストが下の入力欄を覆ってフォーカスを奪う不具合の再発防止 ---
 // 候補リストは position:absolute で浮くので、何もしないと出発欄の候補が到着欄や

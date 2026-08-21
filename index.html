@@ -201,6 +201,17 @@ body {
   cursor: pointer;
 }
 .opt-toggles input { accent-color: var(--blue); }
+/* 予算(運賃上限)。5桁(¥12,345)が収まる幅 */
+.opt-toggles input[type="number"] {
+  width: 72px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 4px;
+  font-size: 13px;
+  color: var(--text);
+  background: #fff;
+  text-align: right;
+}
 .opt-toggles select {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -454,6 +465,10 @@ body {
         <option value="reserved">指定席</option>
         <option value="nonreserved">自由席</option>
       </select>
+    </label>
+    <label title="運賃の上限。指定すると予算内に収まる経路だけを表示します">予算
+      <input type="number" id="opt-budget" min="0" step="100" inputmode="numeric"
+             placeholder="上限なし" onchange="setBudget(this.value)"> 円以内
     </label>
   </div>
   <button class="search-btn" id="search-btn" onclick="doSearch()" disabled>検索</button>
@@ -1026,13 +1041,35 @@ function setSeat(v) {
   saveOpts();
   // 運賃キャッシュ(安い順ソート用)は席種込みなので捨てる
   for (const j of allFoundRoutes) j._fare = null;
-  if (allFoundRoutes.length) renderRoutes();
+  // 予算指定中は席種で予算内/超過の判定が変わる(自由席なら収まる経路がある)ので、
+  // 表示の作り直しでは足りず再検索する。
+  if (allFoundRoutes.length) {
+    if (currentBudget() != null) doSearch();
+    else renderRoutes();
+  }
+}
+// 予算(運賃上限・円)。未入力/0/不正値は「上限なし」= null。
+// 席種と違って候補の出し方そのものが変わる(安い候補の追加・予算超過の除外)ので、
+// 変更したら再検索する。
+function currentBudget() {
+  const el = document.getElementById('opt-budget');
+  if (!el) return null;
+  const n = parseInt(String(el.value).replace(/[^\d]/g, ''), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function setBudget(v) {
+  const el = document.getElementById('opt-budget');
+  const n = parseInt(String(v == null ? '' : v).replace(/[^\d]/g, ''), 10);
+  if (el) el.value = Number.isFinite(n) && n > 0 ? String(n) : '';
+  saveOpts();
+  if (allFoundRoutes.length) doSearch();   // 予算は探索条件なので再検索が要る
 }
 function saveOpts() {
   localStorage.setItem('routeOpts', JSON.stringify({
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
     seat: currentSeat(),
+    budget: currentBudget(),
     mode: travelMode,
   }));
 }
@@ -1042,6 +1079,7 @@ function saveOpts() {
     if (o.express === false) document.getElementById('opt-express').checked = false;
     if (o.shinkansen === false) document.getElementById('opt-shinkansen').checked = false;
     if (o.seat === 'nonreserved') document.getElementById('opt-seat').value = 'nonreserved';
+    if (o.budget > 0) document.getElementById('opt-budget').value = String(o.budget);
     // mode 導入前の保存値(bus:false = バスを使わない)からの移行
     const mode = o.mode || (o.bus === false ? 'rail' : null);
     if (mode) setTravelMode(mode);
@@ -1049,7 +1087,7 @@ function saveOpts() {
 })();
 
 // === Deep-link 入口 ===
-// 外部(map-appのtransit案内 等)から ?from=駅名&to=駅名[&t=HH:MM][&d=YYYY-MM-DD]
+// 外部(map-appのtransit案内 等)から ?from=駅名&to=駅名[&t=HH:MM][&d=YYYY-MM-DD][&budget=円]
 // で起動された場合、出発/到着欄に流し込んで自動検索する。駅名照合は doSearch の既存ロジックに委ねる。
 function applyUrlParams() {
   const p = new URLSearchParams(location.search);
@@ -1070,6 +1108,12 @@ function applyUrlParams() {
   const d = (p.get('d') || '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
     const di = document.getElementById('date-input'); if (di) di.value = d;
+  }
+  // ?budget=3000 で予算(運賃上限)付きの案内に直行できる
+  const budget = (p.get('budget') || '').trim();
+  if (/^\d+$/.test(budget)) {
+    const el = document.getElementById('opt-budget');
+    if (el) el.value = String(parseInt(budget, 10) || '');
   }
   // ?mode=bus でバス限定の案内に直行できる(map-app の「バスで行く」導線用)
   const mode = (p.get('mode') || '').trim();
@@ -1126,6 +1170,7 @@ function doSearch() {
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
     seat: currentSeat(),             // 指定席/自由席(ランキングの運賃換算に効く)
+    maxFare: currentBudget(),        // 予算(運賃上限・円)。null なら上限なし
     noBus: travelMode === 'rail',    // 鉄道のみ
     busOnly: travelMode === 'bus',   // バス限定
     day: getDayType(),               // 運転日フィルタ(0平日/1土/2休)
@@ -1147,7 +1192,7 @@ function doSearch() {
   }
 
   if (waypointCandidates.length === 2) {
-    const journeys = [];
+    let journeys = [];
     const sigs = new Set();
     for (const fid of waypointCandidates[0]) {
       for (const tid of waypointCandidates[1]) {
@@ -1156,7 +1201,7 @@ function doSearch() {
         if (st.type === 'arr') {
           // 締切までに着く最遅出発を求め、その手前の窓から多様な経路を出して
           // 締切以内のものを残す(到着指定でも複数経路を提示)
-          const jl = latestDeparture(fid, tid, st.minutes);
+          const jl = RouterV3.annotateBudget(latestDeparture(fid, tid, st.minutes), opts);
           if (jl) {
             const cands = RouterV3.findJourneys(fid, tid, Math.max(0, jl.dep - 90), opts)
               .filter(j => j.arr <= st.minutes);
@@ -1173,6 +1218,14 @@ function doSearch() {
           if (!sigs.has(sig)) { sigs.add(sig); journeys.push(j); }
         }
       }
+    }
+    // 予算フィルタ(同名駅の候補をまたいだ後の最終段)。findJourneys は駅ペアごとに
+    // 篩っているので、あるペアでは全滅・別のペアでは予算内、という混在が起きうる。
+    // ここでも「予算内が1本でもあれば超過は落とす」に揃える。
+    if (opts.maxFare != null) {
+      for (const j of journeys) RouterV3.annotateBudget(j, opts);
+      const within = journeys.filter(j => !j.budget.over);
+      if (within.length) journeys = within;
     }
     journeys.sort((a, b) => {
       if (st.type === 'arr') {
@@ -1191,6 +1244,8 @@ function doSearch() {
         ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">バスのみで検索しています。収録しているのは都営バスだけなので、営業エリア(東京23区と多摩の一部)の外や、駅から停留所への徒歩連絡が無い場所では経路が出ません。「すべて」に戻してお試しください。</div>`
         : (!opts.express || !opts.shinkansen)
         ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">特急・新幹線をOFFにしています。長距離は各駅停車のみだと日付をまたぐため経路が出ないことがあります。トグルをONにしてお試しください。</div>`
+        : opts.maxFare != null
+        ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">予算¥${opts.maxFare.toLocaleString()}以内で検索しています。予算欄を空にするか金額を上げてお試しください。</div>`
         : overnightHint(waypointCandidates[0][0], waypointCandidates[1][0]);
       document.getElementById('results').innerHTML =
         `<div class="no-route">${fn} → ${tn} の経路が見つかりません${offHint}</div>`;
@@ -1223,6 +1278,9 @@ function doSearch() {
       }
       depMin = best.arr + 4;
     }
+    // 経由指定は区間ごとに最早到着を連結するだけで候補を並べないため、予算での
+    // 絞り込みはできない。総額だけ判定して超過なら警告表示にする。
+    RouterV3.annotateBudget(combined, opts);
     renderMultipleResults([combined], false);  // 経由指定は始発・終電の対象外
   }
 }
@@ -1262,6 +1320,61 @@ function lineColor(name) {
 // legの表示色。バス(mode=1)は系統名でハッシュせずバス専用色にする
 function legColor(l) { return l.mode === 1 ? BUS_COLOR : lineColor(dl(l)); }
 const isBusLeg = l => l.mode === 1;
+
+// === 予算(運賃上限)の表示 ===
+// 判定は j.budget の max だけを使い、超過かどうかは「いま表示している運賃」で
+// 計算し直す。席種を切り替えたときに検索時の判定が残って矛盾するのを避けるため。
+function seatMinFare(fare) {
+  if (!fare) return null;
+  if (!fare.seatFares) return fare.total;
+  return Math.min(fare.seatFares.reserved, fare.seatFares.nonreserved);
+}
+function budgetTagHtml(j, fare) {
+  const b = j && j.budget;
+  if (!b || b.max == null) return '';
+  const yen = n => '¥' + n.toLocaleString();
+  // バス絡みは鉄道運賃しか出せないので判定不能(¥0や過小評価で「予算内」と言わない)
+  if (b.unknown || !(fare.total > 0)) {
+    return `<div style="font-size:11px;color:var(--orange)">予算判定不可</div>`;
+  }
+  const min = seatMinFare(fare);
+  if (min > b.max) {
+    return `<div style="font-size:11px;color:var(--red);font-weight:600">予算超過 +${yen(min - b.max)}</div>`;
+  }
+  if (fare.total > b.max) {
+    // 指定席では超過、自由席なら収まる(逆も同じ)。切替リンクは上の席種欄が出す。
+    return `<div style="font-size:11px;color:var(--orange)">安い席種なら予算内 ${yen(min)}</div>`;
+  }
+  return `<div style="font-size:11px;color:var(--green)">予算内 (残り${yen(b.max - fare.total)})</div>`;
+}
+// 結果一覧の先頭に出す予算バナー。予算内が1本も無いときは理由と最安を示す。
+function budgetBannerHtml(routes) {
+  const withB = routes.filter(j => j.budget && j.budget.max != null);
+  if (!withB.length) return '';
+  const max = withB[0].budget.max;
+  const judged = withB.filter(j => !j.budget.unknown && j.budget.minFare != null);
+  const yen = n => '¥' + n.toLocaleString();
+  if (judged.length && judged.every(j => j.budget.over)) {
+    const cheapest = Math.min.apply(null, judged.map(j => j.budget.minFare));
+    return `<div style="margin:8px 12px 0;padding:10px 12px;border-radius:10px;
+      background:#fef2f2;border:1px solid #fecaca;color:var(--red);font-size:13px;line-height:1.6">
+      予算${yen(max)}以内の経路は見つかりませんでした。最安は${yen(cheapest)}(+${yen(cheapest - max)})です。<br>
+      <span style="color:var(--muted)">予算を上げるか空欄にすると、ほかの経路も表示されます。</span></div>`;
+  }
+  // 「そのままで予算内」と「安い席種を選べば予算内」は分けて数える。
+  // まとめると、指定席では全部超過なのに「予算内◯件」と出てしまう。
+  const within = judged.filter(j => j.budget.fare <= max);
+  const bySeat = judged.filter(j => j.budget.fare > max && j.budget.minFare <= max);
+  if (!within.length && bySeat.length) {
+    return `<div style="margin:8px 12px 0;padding:8px 12px;border-radius:10px;
+      background:#fff7ed;border:1px solid #fed7aa;color:var(--orange);font-size:13px">
+      予算${yen(max)}以内に収まるのは自由席を選んだ場合の${bySeat.length}件です</div>`;
+  }
+  return `<div style="margin:8px 12px 0;padding:8px 12px;border-radius:10px;
+    background:#f0fdf4;border:1px solid #bbf7d0;color:var(--green);font-size:13px">
+    予算${yen(max)}以内の経路 ${within.length}件${
+      bySeat.length ? `<span style="color:var(--muted)"> (ほかに自由席なら予算内 ${bySeat.length}件)</span>` : ''}</div>`;
+}
 
 // === Rendering (journey = RouterV3.findJourneys の結果) ===
 function renderOneRoute(j, index) {
@@ -1306,6 +1419,7 @@ function renderOneRoute(j, index) {
         return h;
       })()}
       ${nBusRides && fare.total > 0 ? `<div style="font-size:11px;color:var(--orange)">バス運賃別途</div>` : ''}
+      ${budgetTagHtml(j, fare)}
     </div>
   </div>`;
 
@@ -1493,9 +1607,13 @@ function sortBarHtml() {
 function renderRoutes() {
   const routes = allFoundRoutes;
   if (!routes.length) return;
-  routes.sort(SORTERS[currentSort] || SORTERS.fast);
+  // 予算内が1本も無いときは既定の早い順ではなく安い順。「あといくら足りないか」が
+  // わかる最安が先頭に来るほうが、予算を決め直す判断に使える。
+  const allOverBudget = routes.every(j => j.budget && j.budget.over);
+  routes.sort(allOverBudget ? SORTERS.cheap : (SORTERS[currentSort] || SORTERS.fast));
   const showCount = showAllRoutes ? routes.length : Math.min(3, routes.length);
   let html = `<div id="first-last-bar">${firstLastBlockHtml()}</div>`;
+  html += budgetBannerHtml(routes);
   html += routes.length > 1 ? sortBarHtml() : '';
   if (routes.length > 1) {
     html += `<div style="padding:0 16px 0;font-size:13px;color:var(--muted)">${routes.length}件の経路</div>`;
