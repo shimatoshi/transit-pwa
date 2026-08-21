@@ -986,10 +986,74 @@ function journeyKm(journey) {
   return km;
 }
 
+// --- 予算(運賃上限) ---
+// opts.maxFare = 予算(円)。CSA探索そのものを運賃で枝刈りすることはできない。
+// 運賃は「会社ごとに通算した営業キロ→運賃表」という非線形関数で、途中駅時点の
+// 運賃が最終運賃の下界にならないためだ(JRの遠距離逓減で1駅先へ延ばすと同額のまま、
+// 乗継割引や特定運賃では先へ進むほうが安くなる区間すらある)。ダイクストラ流の
+// 枝刈りは下界の単調性が前提なので、ここでは成立しない。
+// そこで「候補を出す→総額で篩う」方式を採り、取りこぼしを減らすために
+// findJourneys 側で有料優等抜きの安い候補を積極的に追加している。
+function budgetLimit(opts) {
+  const v = opts && opts.maxFare;
+  if (v == null || v === '') return null;
+  const n = +v;
+  return (Number.isFinite(n) && n > 0) ? n : null;
+}
+
+// 運賃総額。バス絡み(fares.json の対象外で総額が出ない)や例外時は null。
+function journeyFareSafe(journey, opts) {
+  let f;
+  try { f = journeyFare(journey, { seat: opts && opts.seat }); } catch (e) { return null; }
+  if (!f || f.busLegs) return null;
+  return (Number.isFinite(f.total) && f.total > 0) ? f : null;
+}
+
+// 席種を選べる経路(自由席のある特急を含む)は、利用者が安い側を選べるので
+// 予算判定には「選べる中での最安」を使う。指定席で超過・自由席で予算内なら
+// 落とさず seatHint を付けて UI に「自由席なら予算内」と出させる。
+function cheapestSeatFare(f) {
+  if (!f) return null;
+  if (!f.seatFares) return f.total;
+  return Math.min(f.seatFares.reserved, f.seatFares.nonreserved);
+}
+
+// journey.budget を作る。fare は journeyFareSafe の戻り値(null可)。
+function makeBudget(f, max) {
+  const total = f ? f.total : null;
+  const min = cheapestSeatFare(f);
+  const b = {
+    max,
+    fare: total,               // 現在の席種での総額
+    minFare: min,              // 席種を選べる場合の最安総額
+    unknown: f == null,        // バス運賃等で総額を出せない(予算判定不能)
+    over: min != null && min > max,
+    seatHint: null,            // 席種を変えれば予算内に収まる場合の席種
+  };
+  b.overBy = b.over ? min - max : 0;
+  if (f && f.seatFares && total > max && min <= max) {
+    b.seatHint = f.seatFares.nonreserved <= f.seatFares.reserved ? SEAT_NONRESERVED : SEAT_RESERVED;
+  }
+  return b;
+}
+
+// 単発の経路(query/nextJourney/経由検索の連結結果など)に予算情報を付ける。
+// 予算未指定なら budget は付けない(=UI は従来どおりの表示)。
+function annotateBudget(journey, opts) {
+  if (!journey) return journey;
+  const max = budgetLimit(opts);
+  if (max == null) { delete journey.budget; return journey; }
+  journey.budget = makeBudget(journeyFareSafe(journey, opts), max);
+  return journey;
+}
+
 // --- 複数候補検索 ---
 // 1) 最早到着 2) 次発(出発+1) 3) その次 4) 有料優等抜き — を集めて重複排除
+// opts.maxFare を渡すと、候補に j.budget(=makeBudget の戻り値)が付き、
+// 予算内の候補が1本でもあれば予算超過の候補は結果から落とす。
 function findJourneys(srcIdx, dstIdx, depMin, opts) {
   opts = opts || {};
+  const maxFare = budgetLimit(opts);
   const out = [];
   const sigs = new Set();
 
@@ -1053,6 +1117,20 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
     if (!add(query(srcIdx, dstIdx, depMin, Object.assign({}, opts, { banLines })))) break;
   }
 
+  // 予算指定時は「安い候補」を補充する。CSAは最速優先なので、上で集まる候補は
+  // 有料優等・新幹線に偏り、長距離だと全部が予算超過になりうる。有料優等を外した
+  // 経路は乗車券だけなので、予算内に収まる可能性が高い。
+  if (maxFare != null && (opts.express !== false || opts.shinkansen !== false)) {
+    const cheapOpts = Object.assign({}, opts, { express: false, shinkansen: false });
+    let ct = depMin;
+    for (let i = 0; i < 3; i++) {
+      const j = query(srcIdx, dstIdx, ct, cheapOpts);
+      if (!j) break;
+      add(j);
+      ct = j.dep + 1;
+    }
+  }
+
   // ランキング: 「実効到着時刻」= 到着 + 乗換ペナルティ + 割高分の時間換算 で比較する。
   //
   // 以前は有料優等に一律+18分の固定ペナルティを課していたが、固定値では
@@ -1073,13 +1151,31 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   }
   // バスを含む経路は fares.json の対象外で総額が出ない(journeyFareがbusLegsを返す)。
   // 運賃不明の経路は基準にも入れず、従来どおり固定ペナルティで扱う。
-  function fareOf(j) {
-    let f;
-    try { f = journeyFare(j, { seat: opts.seat }); } catch (e) { return null; }
-    if (!f || f.busLegs) return null;
-    return (Number.isFinite(f.total) && f.total > 0) ? f.total : null;
+  const fareObjs = out.map(j => journeyFareSafe(j, opts));
+  const fareCache = fareObjs.map(f => (f ? f.total : null));
+  let allOverBudget = false;
+
+  // 予算(運賃上限)フィルタ。予算内の候補が1本でもあれば超過分は落とす。
+  // 全部が超過するときは落とさず budget.over を立てたまま残す —— 「経路なし」で
+  // 何も出さないより、最安がいくらなのかを見せて予算を決め直させたほうが親切。
+  // 運賃を算出できない経路(バス絡み)は判定不能なので常に残し、unknown を立てる。
+  if (maxFare != null) {
+    for (let i = 0; i < out.length; i++) out[i].budget = makeBudget(fareObjs[i], maxFare);
+    const keep = [], keepFares = [];
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].budget.over) continue;
+      keep.push(out[i]); keepFares.push(fareCache[i]);
+    }
+    if (keep.length) {
+      out.length = 0; out.push.apply(out, keep);
+      fareCache.length = 0; fareCache.push.apply(fareCache, keepFares);
+    } else {
+      // 全滅時は「最速」より「予算にいちばん近い=最安」を先に見せたい。
+      // 下のランキングは到着時刻が支配的なので、ここで安い順に並べ直す。
+      allOverBudget = true;
+    }
   }
-  const fareCache = out.map(fareOf);
+
   const knownFares = fareCache.filter(f => f != null);
   const baseFare = knownFares.length ? Math.min.apply(null, knownFares) : null;
 
@@ -1103,6 +1199,13 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
   // 乗換の重みは既に TRANSFER_PEN としてスコアに入っているので、閾値を設けず
   // スコアそのもので比較する(同点時のみ副次条件)。これで全順序になる。
   out.sort((a, b) => {
+    // 予算内の候補が1本も無いときは、まず安い順(=予算にいちばん近い順)。
+    // 運賃不明(バス絡み)は判定できないので後ろに置く。
+    if (allOverBudget) {
+      const fa = a.budget.minFare, fb = b.budget.minFare;
+      if (fa == null || fb == null) { if (fa !== fb) return fa == null ? 1 : -1; }
+      else if (fa !== fb) return fa - fb;
+    }
     const sa = key.get(a), sb = key.get(b);
     if (sa !== sb) return sa - sb;                                     // 実効到着が早い方
     if (a.transfers !== b.transfers) return a.transfers - b.transfers; // 乗換少
@@ -1113,15 +1216,46 @@ function findJourneys(srcIdx, dstIdx, depMin, opts) {
 }
 
 // 指定発時刻curDepの「次の便」=curDepより後に発車する最速到達経路。
+// 予算指定時は超過する便を数本ぶん読み飛ばして予算内の便を探す(見つからなければ
+// 最後に見た便を budget.over 付きで返す。ボタンを押して無反応より超過表示のほうがよい)。
+const BUDGET_SKIP_MAX = 6;
 function nextJourney(srcIdx, dstIdx, curDep, opts) {
-  const j = query(srcIdx, dstIdx, curDep + 1, opts || {});
-  return (j && j.dep > curDep) ? j : null;
+  opts = opts || {};
+  const max = budgetLimit(opts);
+  let t = curDep, last = null;
+  for (let i = 0; i < (max == null ? 1 : BUDGET_SKIP_MAX); i++) {
+    const j = query(srcIdx, dstIdx, t + 1, opts);
+    if (!j || j.dep <= t) return last;
+    annotateBudget(j, opts);
+    if (max == null || !j.budget.over) return j;
+    last = j;
+    t = j.dep;
+  }
+  return last;
 }
 
 // 指定発時刻curDepの「前の便」=curDepより前に発車する経路のうち最も遅く出るもの。
 // query(L)はL以降の最速発を返す(Lについて非減少)。L<curDepを保つ最大Lを二分探索。
 function prevJourney(srcIdx, dstIdx, curDep, opts, windowMin) {
   opts = opts || {};
+  const max = budgetLimit(opts);
+  if (max != null) {
+    // 予算超過の便はさらに手前へ遡って読み飛ばす(nextJourney と同じ方針)。
+    let t = curDep, last = null;
+    for (let i = 0; i < BUDGET_SKIP_MAX; i++) {
+      const j = prevJourneyRaw(srcIdx, dstIdx, t, opts, windowMin);
+      if (!j) return last;
+      annotateBudget(j, opts);
+      if (!j.budget.over) return j;
+      last = j;
+      t = j.dep;
+    }
+    return last;
+  }
+  return prevJourneyRaw(srcIdx, dstIdx, curDep, opts, windowMin);
+}
+
+function prevJourneyRaw(srcIdx, dstIdx, curDep, opts, windowMin) {
   const win = windowMin || 180;
   let lo = curDep - win, hi = curDep;
   let jlo = query(srcIdx, dstIdx, lo, opts);
@@ -1253,6 +1387,8 @@ const RouterV3 = {
   latestDeparture,
   journeyFare,
   journeyKm,
+  annotateBudget,
+  budgetLimit,
   legKm,
   haversineKm,
   lineCompany,

@@ -126,5 +126,76 @@ for (const c of CASES) {
   console.log(`${ok ? '✓' : '✗'} ${c.from}→${c.to}: ${d.summary}${why.length ? '  [' + why.join(', ') + ']' : ''}${c.note ? '  (' + c.note + ')' : ''}`);
   console.log('   ' + d.legsStr);
 }
+
+// --- 予算(運賃上限)フィルタ ---
+// opts.maxFare を渡すと候補に j.budget が付き、予算内が1本でもあれば超過分は落ちる。
+// 予算内が皆無のときだけ超過候補を budget.over 付きで残す(安い順)。
+console.log('\n=== 予算(運賃上限) ===');
+const t = (name, ok, extra) => { if (!ok) fail++; console.log(`${ok ? '✓' : '✗'} ${name}${extra ? '  ' + extra : ''}`); };
+const search = (from, to, at, budget) =>
+  R.findJourneys(idOf(from), idOf(to), at, budget == null ? {} : { maxFare: budget });
+
+// 予算未指定なら従来どおり budget は付かない(既存の呼び出しに影響しない)
+t('予算未指定では budget が付かない', search('新宿', '横浜', 540).every(j => !j.budget));
+
+for (const c of [
+  { from: '新宿', to: '横浜', at: 540, budget: 600 },     // ¥616の埼京線直通が落ち¥508が残る
+  { from: '柏',   to: '東京', at: 540, budget: 700 },
+  { from: '新宿', to: '松本', at: 540, budget: 4500 },    // あずさ¥6420が落ち各停¥3850が残る
+]) {
+  const all = search(c.from, c.to, c.at);
+  const js  = search(c.from, c.to, c.at, c.budget);
+  const fareOf = j => R.journeyFare(j).total;
+  const over = js.filter(j => j.budget.over);
+  const maxKept = js.length ? Math.max.apply(null, js.map(fareOf)) : 0;
+  t(`${c.from}→${c.to} 予算¥${c.budget}: 全件が予算内`,
+    js.length > 0 && over.length === 0 && maxKept <= c.budget,
+    `${js.length}件 最高¥${maxKept} (予算なしなら${all.length}件 最高¥${Math.max.apply(null, all.map(fareOf))})`);
+  // 予算なしだと超過候補が混ざる区間であること(=このケースがテストとして有意)。
+  // 件数は「安い候補の補充」で埋まることがあるので、件数の減少では判定しない。
+  t(`${c.from}→${c.to} 予算なしでは超過候補が混ざる(フィルタが効いている)`,
+    all.some(j => fareOf(j) > c.budget),
+    `${all.length}件中 超過${all.filter(j => fareOf(j) > c.budget).length}件 → 予算あり${js.length}件`);
+}
+
+// 予算内が存在しないケース: 落とさず超過フラグ付きで残し、最安を先頭にする
+{
+  const js = search('東京', '新大阪', 540, 3000);
+  const mins = js.map(j => j.budget.minFare).filter(v => v != null);
+  t('予算内が皆無なら候補を落とさず残す', js.length > 0, `${js.length}件`);
+  t('残った候補は全て budget.over', js.every(j => j.budget.over));
+  t('最安が先頭に来る', js[0].budget.minFare === Math.min.apply(null, mins),
+    `先頭¥${js[0].budget.minFare} 最安¥${Math.min.apply(null, mins)}`);
+  t('overBy が不足額になっている', js[0].budget.overBy === js[0].budget.minFare - 3000);
+}
+
+// 席種で予算内/超過が変わる経路は落とさず seatHint を付ける(自由席なら収まる)
+{
+  const jn = search('東京', '新大阪', 540, 14000).find(j => j.budget.seatHint);
+  t('指定席では超過・自由席なら予算内の経路に seatHint が付く', !!jn,
+    jn ? `指定¥${jn.budget.fare} 自由¥${jn.budget.minFare} hint=${jn.budget.seatHint}` : '');
+  t('seatHint 付きの経路は予算内として残る', !!jn && jn.budget.over === false);
+}
+
+// 運賃を算出できない経路(バス絡み)は判定不能として残す
+{
+  const bid = graph.stations.findIndex(s => s.m && s.n === '晴海三丁目');
+  const js = R.findJourneys(idOf('新橋'), bid, 600, { day: 0, maxFare: 200 });
+  t('バス絡みは予算判定不能(unknown)として残る',
+    js.length > 0 && js.every(j => j.budget.unknown && !j.budget.over), `${js.length}件`);
+}
+
+// 次の便/前の便も予算超過を読み飛ばす
+{
+  const s = idOf('東京'), g = idOf('新大阪'), opts = { maxFare: 14000 };
+  const j0 = search('東京', '新大阪', 540, 14000)[0];
+  const nx = R.nextJourney(s, g, j0.dep, opts);
+  const pv = R.prevJourney(s, g, j0.dep, opts);
+  t('nextJourney が予算情報を付けて返す', !!nx && !!nx.budget && nx.dep > j0.dep);
+  t('prevJourney が予算情報を付けて返す', !!pv && !!pv.budget && pv.dep < j0.dep);
+  t('予算未指定の nextJourney は従来どおり budget を付けない',
+    !(R.nextJourney(s, g, 540, {}) || {}).budget);
+}
+
 console.log(fail === 0 ? '\nALL OK' : `\n${fail} FAILED`);
 process.exit(fail === 0 ? 0 : 1);
