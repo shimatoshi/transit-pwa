@@ -53,7 +53,9 @@
 //       PR #9 も独立に v46 を名乗っていたため v53 に繰り上げた。
 // v54 = 駅の会社判定をＪＲ実路線名リストの照合に修正 (#15)。
 //       PR #24 も独立に v46 を名乗っていたため v54 に繰り上げた。
-const VERSION = 'v54';
+// v55 = 経路検索結果に乗車・降車のホーム番号(のりば)を表示 (platforms.json / platform_match.js)。
+//       PR #20 も独立に v46 を名乗っていたため v55 に繰り上げた。
+const VERSION = 'v55';
 const CACHE_NAME = `transit-${VERSION}`;
 
 // アプリの外枠。これが無いと起動すらできない。
@@ -61,6 +63,7 @@ const SHELL = [
   './',
   './index.html',
   './router_v3.js?v=13',
+  './platform_match.js?v=1',
   './data_worker.js?v=1',
   './manifest.json',
 ];
@@ -75,10 +78,12 @@ const DATA = [
 ];
 
 // 無くても起動はできるもの。取得に失敗しても install を失敗させない。
+// platforms.json はのりば表示用(無くても検索は動く)。
 const OPTIONAL = [
   './debug-note.js',
   './icon-192.png',
   './icon-512.png',
+  './platforms.json?v=1',
 ];
 
 const REQUIRED = [...SHELL, ...DATA];

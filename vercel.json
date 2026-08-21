@@ -1,7 +1,7 @@
 {
   "headers": [
     {
-      "source": "/((?!graph_v2\\.json|trains_v3_meta\\.json|fares\\.json|trains_v3\\.bin\\.gz).*)",
+      "source": "/((?!graph_v2\\.json|trains_v3_meta\\.json|fares\\.json|trains_v3\\.bin\\.gz|platforms\\.json).*)",
       "headers": [
         {
           "key": "Cache-Control",
@@ -10,7 +10,7 @@
       ]
     },
     {
-      "source": "/(graph_v2\\.json|trains_v3_meta\\.json|fares\\.json|trains_v3\\.bin\\.gz)",
+      "source": "/(graph_v2\\.json|trains_v3_meta\\.json|fares\\.json|trains_v3\\.bin\\.gz|platforms\\.json)",
       "headers": [
         {
           "key": "Cache-Control",

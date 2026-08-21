@@ -12,6 +12,7 @@ ekitan_stations.json
 *.log
 __pycache__/
 gapfill_state.json
+platforms_state.json
 trains_v3.bin
 missing_stations2.json
 known_txs2.json
