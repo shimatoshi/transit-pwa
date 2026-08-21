@@ -22,7 +22,7 @@ global.RouterV3 = require(path.join(BASE, 'router_v3.js'));
 
 const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
-  '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, ' +
+  '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, normName, jpHolidays, ' +
   'overnightHint, setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
   'setSeat, currentSeat, ' +
   'showDropdown, hideDropdown, AC_GAP, ' +
@@ -34,7 +34,10 @@ const meta = JSON.parse(fs.readFileSync(path.join(BASE, 'trains_v3_meta.json'), 
 const fares = JSON.parse(fs.readFileSync(path.join(BASE, 'fares.json'), 'utf8'));
 const buf = fs.readFileSync(path.join(BASE, 'trains_v3.bin'));
 RouterV3.loadBinary(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), meta, g.stations, fares);
-g._nameIndex = g.stations.map((s, i) => ({ id: i, name: s.n,
+// norm は index.html 側の normName で作る。ここで別途組み直すと本体と定義がずれる
+// (実際、全角/半角の正規化を入れたときに norm を足し忘れてこのテストだけ落ちた)。
+// nameEn は長音符号を畳んで素の母音でも引けるようにする (Tokyo/Tōkyō どちらでも)。
+g._nameIndex = g.stations.map((s, i) => ({ id: i, name: s.n, norm: __ui.normName(s.n),
   nameEn: (s.e || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
   kana: s.r || '',
   pref: s.p, lines: s.m ? (s.sys || []) : s.l, mode: s.m ? 1 : 0 }));
@@ -79,6 +82,60 @@ for (const [q, want] of [['大手町', '大手町(東京)'], ['日本橋', '日�
     ids.length > 0 && ids.every(i => !S[i].m) && ids.some(i => S[i].n === want),
     ids.map(i => S[i].n).join('/'));
 }
+
+// 全角/半角の表記ゆれ。データ側が全角で持っている駅(羽田空港第１・第２ターミナル、
+// 成田空港(空港第２ビル)、札幌(ＪＲ)、ＪＲ淡路 ほか鉄道66駅)は、素の includes/=== だと
+// 利用者が半角で打った瞬間に0件になっていた。羽田は半角で打つのが自然な駅名で、
+// ?from=羽田空港第2ターミナル のディープリンクも同じ理由で外れる。
+for (const [q, want] of [
+  ['羽田空港第2ターミナル', '羽田空港第２ターミナル(東京モノレール)'],
+  ['羽田空港第3ターミナル', '羽田空港第３ターミナル(京急)'],
+  ['羽田空港第1・第2ターミナル', '羽田空港第１・第２ターミナル(京急)'],
+  ['成田空港(空港第2ビル)', '成田空港(空港第２ビル)'],
+  ['札幌(JR)', '札幌(ＪＲ)'],
+  ['JR淡路', 'ＪＲ淡路'],
+]) {
+  const ids = __ui.findAllByName(q);
+  t(`半角入力「${q}」が全角の駅名に解決される`,
+    ids.length > 0 && ids.some(i => S[i].n === want),
+    ids.map(i => S[i].n).join('/') || '(0件)');
+  const sg = __ui.searchStations(q);
+  t(`半角入力「${q}」がサジェストに出る`,
+    sg.length > 0 && sg.some(s => s.name === want),
+    sg.slice(0, 3).map(s => s.name).join('/') || '(0件)');
+}
+// 全角のまま打っても従来通り引ける(正規化で壊していないこと)
+t('全角のまま「羽田空港第２ターミナル」も引ける',
+  __ui.findAllByName('羽田空港第２ターミナル(東京モノレール)').length > 0);
+// 畳みすぎて別駅を巻き込んでいないこと
+t('「丸の内」と「丸ノ内」は別駅のまま',
+  !__ui.findAllByName('丸の内').some(i => S[i].n.includes('丸ノ内')));
+
+// --- 祝日カレンダー ---
+// 以前は2026年ぶんを直書きしており、日付入力に上限が無いので2027年以降を選ぶと
+// 元日でも平日ダイヤで案内していた。年から計算するようにしたので、既知の年で照合する。
+const HOL2026 = ['2026-01-01', '2026-01-12', '2026-02-11', '2026-02-23', '2026-03-20',
+  '2026-04-29', '2026-05-03', '2026-05-04', '2026-05-05', '2026-05-06',
+  '2026-07-20', '2026-08-11', '2026-09-21', '2026-09-22', '2026-09-23',
+  '2026-10-12', '2026-11-03', '2026-11-23'];
+// 2027: 春分3/21が日曜→3/22振替。敬老9/20と秋分9/23の間は2日空くので国民の休日は無い。
+const HOL2027 = ['2027-01-01', '2027-01-11', '2027-02-11', '2027-02-23', '2027-03-21',
+  '2027-03-22', '2027-04-29', '2027-05-03', '2027-05-04', '2027-05-05',
+  '2027-07-19', '2027-08-11', '2027-09-20', '2027-09-23',
+  '2027-10-11', '2027-11-03', '2027-11-23'];
+for (const [year, want] of [[2026, HOL2026], [2027, HOL2027]]) {
+  const got = [...__ui.jpHolidays(year)].sort();
+  const miss = want.filter(d => !got.includes(d));
+  const extra = got.filter(d => !want.includes(d));
+  t(`${year}年の祝日が一致する`, miss.length === 0 && extra.length === 0,
+    miss.length || extra.length ? `不足:${miss.join(',')} 余分:${extra.join(',')}` : `${got.length}日`);
+}
+// 振替休日と国民の休日が個別に効いていること
+t('2026-09-22 が国民の休日として入る', __ui.jpHolidays(2026).has('2026-09-22'));
+t('2026-05-06 が振替休日として入る(5/3が日曜)', __ui.jpHolidays(2026).has('2026-05-06'));
+t('2027-03-22 が振替休日として入る(春分3/21が日曜)', __ui.jpHolidays(2027).has('2027-03-22'));
+t('2027年に国民の休日を作らない(敬老と秋分が2日空き)',
+  !__ui.jpHolidays(2027).has('2027-09-21') && !__ui.jpHolidays(2027).has('2027-09-22'));
 
 // --- 1日で着かない超長距離の「経路なし」ヒント ---
 // 稚内→博多 等は当日中の列車では到達できず必ず経路なしになる。素の「見つかりません」だと
