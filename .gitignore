@@ -17,3 +17,5 @@ missing_stations2.json
 known_txs2.json
 bus_trips.json
 data/gtfs/*.zip
+
+gapfill_rev_state.json
