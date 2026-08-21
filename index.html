@@ -489,20 +489,64 @@ document.addEventListener('DOMContentLoaded', () => {
   if (di) di.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 });
 
-// 2026年の祝日(休日=ekitan dw=2扱い)。最小限。
-const HOLIDAYS_2026 = new Set([
-  '2026-01-01', '2026-01-12', '2026-02-11', '2026-02-23', '2026-03-20',
-  '2026-04-29', '2026-05-03', '2026-05-04', '2026-05-05', '2026-05-06',
-  '2026-07-20', '2026-08-11', '2026-09-21', '2026-09-22', '2026-09-23',
-  '2026-10-12', '2026-11-03', '2026-11-23',
-]);
+// 祝日(休日=ekitan dw=2扱い)を年から計算する。
+// 以前は2026年ぶんを直書きしていたが、日付入力に上限が無いので2027年以降を選ぶと
+// 祝日が全部「平日」に落ち、元日でも平日ダイヤで案内していた。毎年の追記漏れが
+// そのままダイヤの間違いになるので、規則で出す。
+//
+// 2020年の改正後(体育の日→スポーツの日、天皇誕生日2/23)の規則。過去日は対象外。
+// 春分/秋分は 1900-2099 で通用する近似式(海上保安庁の略算式)。
+const FIXED_HOLIDAYS = [
+  [1, 1], [2, 11], [2, 23], [4, 29], [5, 3], [5, 4], [5, 5], [8, 11], [11, 3], [11, 23],
+];
+// [月, 第n週, 曜日] ハッピーマンデー
+const NTH_MONDAY_HOLIDAYS = [[1, 2], [7, 3], [9, 3], [10, 2]];
+
+const _holidayCache = new Map();
+function jpHolidays(year) {
+  if (_holidayCache.has(year)) return _holidayCache.get(year);
+  const ymd = (m, d) => `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const set = new Set();
+  for (const [m, d] of FIXED_HOLIDAYS) set.add(ymd(m, d));
+  for (const [m, nth] of NTH_MONDAY_HOLIDAYS) {
+    const first = new Date(year, m - 1, 1).getDay();       // 0=日
+    const day = 1 + ((8 - first) % 7) + (nth - 1) * 7;     // その月の第nth月曜
+    set.add(ymd(m, day));
+  }
+  const y = year - 1980, leap = Math.floor(y / 4);
+  set.add(ymd(3, Math.floor(20.8431 + 0.242194 * y - leap)));   // 春分の日
+  set.add(ymd(9, Math.floor(23.2488 + 0.242194 * y - leap)));   // 秋分の日
+
+  const has = d => set.has(`${year}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+  const add = d => set.add(`${year}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+
+  // 振替休日: 祝日が日曜なら、その後で祝日でない最初の日を休日にする
+  for (const key of [...set]) {
+    const d = new Date(key + 'T00:00:00');
+    if (d.getDay() !== 0) continue;
+    const n = new Date(d);
+    do { n.setDate(n.getDate() + 1); } while (has(n));
+    add(n);
+  }
+  // 国民の休日: 祝日に前後を挟まれた平日(2026-09-22 など)。挟まれるのが1日のときだけ
+  for (const key of [...set]) {
+    const d = new Date(key + 'T00:00:00');
+    const mid = new Date(d); mid.setDate(mid.getDate() + 1);
+    const nxt = new Date(d); nxt.setDate(nxt.getDate() + 2);
+    if (!has(mid) && has(nxt) && mid.getDay() !== 0) add(mid);
+  }
+  _holidayCache.set(year, set);
+  return set;
+}
+
 // 検索日の運転日種別: 0=平日 1=土曜 2=休日(日祝)
 function getDayType() {
   const di = document.getElementById('date-input');
   const v = di && di.value;
   const d = v ? new Date(v + 'T00:00:00') : new Date();
   const dow = d.getDay();             // 0=日,6=土
-  if (dow === 0 || HOLIDAYS_2026.has(v)) return 2;
+  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  if (dow === 0 || jpHolidays(d.getFullYear()).has(key)) return 2;
   if (dow === 6) return 1;
   return 0;
 }

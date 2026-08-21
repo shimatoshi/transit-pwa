@@ -22,7 +22,7 @@ global.RouterV3 = require(path.join(BASE, 'router_v3.js'));
 
 const html = fs.readFileSync(path.join(BASE, 'index.html'), 'utf8');
 const src = /<script>\n([\s\S]*?)\n<\/script>/.exec(html)[1] +
-  '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, normName, ' +
+  '\n;globalThis.__ui = { renderOneRoute, renderCredits, searchStations, findAllByName, normName, jpHolidays, ' +
   'overnightHint, setTravelMode, getTravelMode: () => travelMode, setLastOpts: o => { lastSearchOpts = o; }, ' +
   'setSeat, currentSeat, ' +
   'showDropdown, hideDropdown, AC_GAP, ' +
@@ -108,6 +108,32 @@ t('全角のまま「羽田空港第２ターミナル」も引ける',
 // 畳みすぎて別駅を巻き込んでいないこと
 t('「丸の内」と「丸ノ内」は別駅のまま',
   !__ui.findAllByName('丸の内').some(i => S[i].n.includes('丸ノ内')));
+
+// --- 祝日カレンダー ---
+// 以前は2026年ぶんを直書きしており、日付入力に上限が無いので2027年以降を選ぶと
+// 元日でも平日ダイヤで案内していた。年から計算するようにしたので、既知の年で照合する。
+const HOL2026 = ['2026-01-01', '2026-01-12', '2026-02-11', '2026-02-23', '2026-03-20',
+  '2026-04-29', '2026-05-03', '2026-05-04', '2026-05-05', '2026-05-06',
+  '2026-07-20', '2026-08-11', '2026-09-21', '2026-09-22', '2026-09-23',
+  '2026-10-12', '2026-11-03', '2026-11-23'];
+// 2027: 春分3/21が日曜→3/22振替。敬老9/20と秋分9/23の間は2日空くので国民の休日は無い。
+const HOL2027 = ['2027-01-01', '2027-01-11', '2027-02-11', '2027-02-23', '2027-03-21',
+  '2027-03-22', '2027-04-29', '2027-05-03', '2027-05-04', '2027-05-05',
+  '2027-07-19', '2027-08-11', '2027-09-20', '2027-09-23',
+  '2027-10-11', '2027-11-03', '2027-11-23'];
+for (const [year, want] of [[2026, HOL2026], [2027, HOL2027]]) {
+  const got = [...__ui.jpHolidays(year)].sort();
+  const miss = want.filter(d => !got.includes(d));
+  const extra = got.filter(d => !want.includes(d));
+  t(`${year}年の祝日が一致する`, miss.length === 0 && extra.length === 0,
+    miss.length || extra.length ? `不足:${miss.join(',')} 余分:${extra.join(',')}` : `${got.length}日`);
+}
+// 振替休日と国民の休日が個別に効いていること
+t('2026-09-22 が国民の休日として入る', __ui.jpHolidays(2026).has('2026-09-22'));
+t('2026-05-06 が振替休日として入る(5/3が日曜)', __ui.jpHolidays(2026).has('2026-05-06'));
+t('2027-03-22 が振替休日として入る(春分3/21が日曜)', __ui.jpHolidays(2027).has('2027-03-22'));
+t('2027年に国民の休日を作らない(敬老と秋分が2日空き)',
+  !__ui.jpHolidays(2027).has('2027-09-21') && !__ui.jpHolidays(2027).has('2027-09-22'));
 
 // --- 1日で着かない超長距離の「経路なし」ヒント ---
 // 稚内→博多 等は当日中の列車では到達できず必ず経路なしになる。素の「見つかりません」だと

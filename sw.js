@@ -34,7 +34,7 @@
 // v45 = 特急/新幹線の指定席・自由席の料金差(fares.json に express.seat を追加、?v=11)。
 // v46 = 運転日タグのフォールバック修正(trains_v3_meta.json の trips.c、?v=4)と
 //       同名別駅の誤座標修正+徒歩連絡の張り直し(graph_v2.json ?v=6 / meta ?v=4)、
-//       駅名の全角/半角ゆれ吸収(index.html)。
+//       駅名の全角/半角ゆれ吸収と祝日カレンダーの計算化(index.html)。
 const VERSION = 'v46';
 const CACHE_NAME = `transit-${VERSION}`;
 
