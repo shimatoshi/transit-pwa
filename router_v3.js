@@ -20,6 +20,18 @@ const BUS_TRANSFER = 6;
 // 線形がうねる会社は fares.json の km_scale で追加補正
 const RAIL_KM_FACTOR = 1.06;
 const INF = 0x3fffffff;
+// 複数日探索の上限(当日+この日数)。connectionデータは当日分+深夜帯(発<06:00)の+1440複製
+// しか持たないため、素の1パス走査では翌朝6時までしか辿れず、宿泊を挟む超長距離
+// (稚内→博多、根室→長崎 等)が構造的に経路なしになる(Issue #14)。query() は同じ
+// connection列を+1440分ずつずらして再走査する(日単位ロールオーバー)ことで、データ量を
+// 増やさずに翌日以降の接続へ乗り継げる。
+// 上限を2日にする理由: 国内最長級のOD(稚内→枕崎 等)でも1泊(翌日中の到達)で収まり、
+// 接続の悪い末端どうしを見込んでも+2日(=出発から3日目の朝まで、深夜複製込みで実質
+// 丸3日)あれば十分。一方で上限を伸ばすほど「本当に到達不能なOD」での全connection
+// 走査回数が線形に増える(1パス≈340万conn)。到達済みの目的地がある通常の検索では
+// dT > arr[dst] の枝刈りで追加パスは即座に打ち切られるため、当日完結の近距離検索に
+// 追加コストはほぼ無い。
+const MAX_EXTRA_DAYS = 2;
 
 // 有料優等判定。日本の私鉄「特急」は大半が無料(京急/京成/南海/阪神/山陽/東急/名鉄等)、
 // JR/近鉄の特急と固有名の有料列車のみ特急券が要る。誤って無料快速(大和路快速/関空快速等)を
@@ -311,6 +323,7 @@ function query(srcIdx, dstIdx, depMin, opts) {
   const inConn = new Int32Array(ns).fill(-1);   // 到着connインデックス
   const inBoard = new Int32Array(ns).fill(-1);  // そのtripに乗ったconn
   const inFoot = new Int32Array(ns).fill(-1);   // 徒歩で来た場合の元駅
+  const inOff = new Int32Array(ns);             // 到着connの日オフセット(分, k*1440)
   const tripBoard = new Int32Array(D.tripLine.length).fill(-1);
 
   arr[srcIdx] = depMin;
@@ -323,48 +336,63 @@ function query(srcIdx, dstIdx, depMin, opts) {
   // バス限定時はバスconnだけを並べた添字配列を走査する(鉄道connを読み飛ばさない)
   const scan = busOnly ? busConnIndex() : null;
   const nScan = scan ? scan.length : D.nConn;
-  const c0 = scan ? firstIdxAfter(scan, depMin) : firstConnAfter(depMin);
 
-  for (let ci = c0; ci < nScan; ci++) {
-    const c = scan ? scan[ci] : ci;
-    const dT = D.cDepT[c];
-    if (dT > arr[dstIdx]) break; // これ以降は改善不可
-    const trip = D.cTrip[c];
-    if (banTrips && banTrips.has(trip)) continue;
-    if (banLines && banLines.has(D.lines[D.tripLine[trip]])) continue;
-    if (dayMask && !(D.tripCal[trip] & dayMask)) continue;   // 該当運転日でない列車を除外
-    if (noBus && mode[trip] === 1) continue;
-    if (!useShink && D.tripShink[trip]) continue;
-    if (!useExpress && D.tripPaid[trip]) continue;
+  // 日単位ロールオーバー: day=0が当日、day=kは同じconnection列を+k*1440分ずらした
+  // 「k日後の同ダイヤ」として走査する(上限は MAX_EXTRA_DAYS 参照)。
+  // 物理的な1本の列車(日跨ぎ運行含む)は時刻正規化により必ず1パス内に収まるので、
+  // パス境界で tripBoard をリセットしても乗車継続を壊さない(翌日の同tripは別の運行)。
+  // 注意: 曜日は日ごとに進むが日付情報を持たないため、dayMask(運転日フィルタ)は
+  // 全パスに同じマスクを適用する近似(金曜→土曜ダイヤの切り替わり等は吸収しない)。
+  // これは既存の深夜帯+1440複製が持っていた近似と同じ。
+  for (let day = 0; day <= MAX_EXTRA_DAYS; day++) {
+    const off = day * 1440;
+    if (off > arr[dstIdx]) break;   // 既に前日までに到達済みなら以降の日は不要
+    if (day > 0) tripBoard.fill(-1);
+    const c0 = scan ? firstIdxAfter(scan, depMin - off) : firstConnAfter(depMin - off);
 
-    const dS = D.cDepS[c];
-    let board = tripBoard[trip] !== -1;
-    if (!board && arr[dS] < INF) {
-      // 同一駅乗換バッファ。出発駅(=直接歩いて来た/検索起点)はバッファ0。
-      // バスが絡む乗換(乗る側・降りた側のどちらか)は厚めのバッファを使う
-      let buf = 0;
-      if (!((dS === srcIdx || inFoot[dS] >= 0) && inConn[dS] === -1)) {
-        const prevBus = inConn[dS] >= 0 && mode && mode[D.cTrip[inConn[dS]]] === 1;
-        buf = (mode && mode[trip] === 1) || prevBus ? BUS_TRANSFER : MIN_TRANSFER;
+    for (let ci = c0; ci < nScan; ci++) {
+      const c = scan ? scan[ci] : ci;
+      const dT = D.cDepT[c] + off;
+      if (dT > arr[dstIdx]) break; // これ以降は改善不可
+      const trip = D.cTrip[c];
+      if (banTrips && banTrips.has(trip)) continue;
+      if (banLines && banLines.has(D.lines[D.tripLine[trip]])) continue;
+      if (dayMask && !(D.tripCal[trip] & dayMask)) continue;   // 該当運転日でない列車を除外
+      if (noBus && mode[trip] === 1) continue;
+      if (!useShink && D.tripShink[trip]) continue;
+      if (!useExpress && D.tripPaid[trip]) continue;
+
+      const dS = D.cDepS[c];
+      let board = tripBoard[trip] !== -1;
+      if (!board && arr[dS] < INF) {
+        // 同一駅乗換バッファ。出発駅(=直接歩いて来た/検索起点)はバッファ0。
+        // バスが絡む乗換(乗る側・降りた側のどちらか)は厚めのバッファを使う
+        let buf = 0;
+        if (!((dS === srcIdx || inFoot[dS] >= 0) && inConn[dS] === -1)) {
+          const prevBus = inConn[dS] >= 0 && mode && mode[D.cTrip[inConn[dS]]] === 1;
+          buf = (mode && mode[trip] === 1) || prevBus ? BUS_TRANSFER : MIN_TRANSFER;
+        }
+        if (arr[dS] + buf <= dT) board = true;
       }
-      if (arr[dS] + buf <= dT) board = true;
-    }
-    if (!board) continue;
-    if (tripBoard[trip] === -1) tripBoard[trip] = c;
+      if (!board) continue;
+      if (tripBoard[trip] === -1) tripBoard[trip] = c;
 
-    const aS = D.cArrS[c], aT = D.cArrT[c];
-    if (aT < arr[aS]) {
-      arr[aS] = aT;
-      inConn[aS] = c;
-      inBoard[aS] = tripBoard[trip];
-      inFoot[aS] = -1;
-      if (D.foot[aS]) {
-        for (const [to, w] of D.foot[aS]) {
-          if (aT + w < arr[to]) {
-            arr[to] = aT + w;
-            inConn[to] = c;          // 徒歩元の到着conn
-            inBoard[to] = tripBoard[trip];
-            inFoot[to] = aS;
+      const aS = D.cArrS[c], aT = D.cArrT[c] + off;
+      if (aT < arr[aS]) {
+        arr[aS] = aT;
+        inConn[aS] = c;
+        inBoard[aS] = tripBoard[trip];
+        inFoot[aS] = -1;
+        inOff[aS] = off;
+        if (D.foot[aS]) {
+          for (const [to, w] of D.foot[aS]) {
+            if (aT + w < arr[to]) {
+              arr[to] = aT + w;
+              inConn[to] = c;          // 徒歩元の到着conn
+              inBoard[to] = tripBoard[trip];
+              inFoot[to] = aS;
+              inOff[to] = off;
+            }
           }
         }
       }
@@ -386,14 +414,17 @@ function query(srcIdx, dstIdx, depMin, opts) {
     const viaFoot = inFoot[cur] >= 0;
     const rideEnd = viaFoot ? inFoot[cur] : cur;
     const cEnd = inConn[cur], cStart = inBoard[cur];
+    // 乗車(cStart)と降車(cEnd)は必ず同一パス内(tripBoardをパスごとにリセットするため)
+    // なので、日オフセットは inOff[cur] の1本で足りる
+    const off = inOff[cur];
     if (cEnd === -1 || cStart === -1) return null; // 整合性エラー
     if (viaFoot) {
-      legs.unshift({ kind: 'walk', from: rideEnd, to: cur, min: arr[cur] - D.cArrT[cEnd] });
+      legs.unshift({ kind: 'walk', from: rideEnd, to: cur, min: arr[cur] - (D.cArrT[cEnd] + off) });
     }
     const trip = D.cTrip[cEnd];
     // trip内の停車列を stopI で抽出
     const i0 = D.cStopI[cStart], i1 = D.cStopI[cEnd] + 1;
-    const shift = D.cDepT[cStart] - D.stD[i0]; // +1440複製conn対応
+    const shift = D.cDepT[cStart] + off - D.stD[i0]; // +1440複製conn/日ロールオーバー対応
     const stops = [];
     for (let i = i0; i <= i1; i++) {
       stops.push({
@@ -424,7 +455,7 @@ function query(srcIdx, dstIdx, depMin, opts) {
       type: D.types[D.tripType[trip]],
       dest: D.tripDest[trip],
       stops,
-      dep: D.cDepT[cStart], arr: D.cArrT[cEnd],
+      dep: D.cDepT[cStart] + off, arr: D.cArrT[cEnd] + off,
       from: D.cDepS[cStart], to: rideEnd,
     });
     cur = D.cDepS[cStart];
