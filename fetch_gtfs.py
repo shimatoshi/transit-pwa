@@ -44,6 +44,50 @@ from datetime import date, datetime, timezone
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 
+# カタログに載っていないが再配布可(CC BY 4.0)で認証なしに取れるフィード。
+#
+# gtfs-data.jp / ODPT のどちらのカタログにも現れないため、ここだけURL直指定で持つ。
+# 政令市クラスの空白域(北海道・中部)を埋めるものなので、カタログ化されるまでは残す。
+# (都営バスは ODPT_FEEDS 側で解決できるのでここには置かない)
+FIXED_FEEDS = {
+    # ---- 北海道 ----
+    'hokkaido_chuo': {
+        'name': '北海道中央バス',
+        'operator': '北海道中央バス株式会社',
+        'url': 'https://ckan.hoda.jp/dataset/24d1dd70-5395-4d6b-b41f-0d83e8eabdb9/resource/dbadfccc-670e-49b9-be77-c3f346ee3160/download/hokkaido_chuo.zip',
+        'catalog': 'https://ckan.hoda.jp/dataset/gtfs-data/resource/dbadfccc-670e-49b9-be77-c3f346ee3160',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '北海道中央バス株式会社・北海道オープンデータポータル(HODA)',
+        'pref': '北海道',
+        'source': 'fixed',
+    },
+    'jotetsu': {
+        'name': 'じょうてつバス',
+        'operator': 'じょうてつ株式会社',
+        'url': 'https://ckan.hoda.jp/dataset/24d1dd70-5395-4d6b-b41f-0d83e8eabdb9/resource/fef98fef-6fe2-472f-bde3-9d4f0a509a4a/download/joutetsu.zip',
+        'catalog': 'https://ckan.hoda.jp/dataset/gtfs-data/resource/fef98fef-6fe2-472f-bde3-9d4f0a509a4a',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': 'じょうてつ株式会社・北海道オープンデータポータル(HODA)',
+        'pref': '北海道',
+        'source': 'fixed',
+    },
+    # ---- 中部 ----
+    'nagoya': {
+        'name': '名古屋市バス',
+        'operator': '名古屋市交通局',
+        'url': 'https://data.bodik.jp/dataset/c5794008-8053-42ab-99b9-ee7f6fdf9a9e/resource/125a1d12-7df6-489c-abde-911856e05d1b/download/20260328_bus-gtfs-jp.zip',
+        'catalog': 'https://data.bodik.jp/dataset/231002_7109030000_bus-gtfs-jp',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '名古屋市交通局',
+        'pref': '愛知県',
+        'source': 'fixed',
+    },
+}
+
+
 UA = 'transit-pwa gtfs fetcher (+https://github.com/shimatoshi/transit-pwa)'
 
 # 再配布可のライセンスだけを通す。カタログ側の表記ゆれをここで正規化する
@@ -237,6 +281,17 @@ def catalog_odpt(prev):
 
 # ---------- 取得 ----------
 
+def resolve_gtfs_data_jp_url(org, feed_id):
+    """GTFSデータリポジトリ(gtfs-data.jp)の現行版(rid=current)ダウンロードURLを解決する。
+    配布URLは署名付きS3 URLで改正のたびに uid が変わるため、API から都度引く。"""
+    api = f'https://api.gtfs-data.jp/v2/organizations/{org}/feeds/{feed_id}'
+    body = json.loads(fetch(api))['body']
+    for gf in body['gtfs_files']:
+        if gf['rid'] == 'current':
+            return gf['gtfs_url']
+    sys.exit(f'{org}/{feed_id}: rid=current が見つからない')
+
+
 def feed_info(zip_bytes):
     """feed_info.txt からデータ基準日を拾う(台帳・UI表示用)"""
     out = {}
@@ -287,7 +342,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=os.path.join(BASE, 'data', 'gtfs'))
     ap.add_argument('--only', action='append', help='フィードキー(複数可)')
-    ap.add_argument('--source', action='append', choices=['gtfs-data.jp', 'odpt'],
+    ap.add_argument('--source', action='append',
+                    choices=['gtfs-data.jp', 'odpt', 'fixed'],
                     help='カタログを絞る')
     ap.add_argument('--force', action='store_true')
     ap.add_argument('--jobs', type=int, default=6)
@@ -300,8 +356,10 @@ def main():
         with open(mpath) as f:
             manifest = json.load(f)
 
-    sources = args.source or ['gtfs-data.jp', 'odpt']
+    sources = args.source or ['gtfs-data.jp', 'odpt', 'fixed']
     feeds = {}
+    if 'fixed' in sources:
+        feeds.update({k: dict(v) for k, v in FIXED_FEEDS.items()})
     if 'odpt' in sources:
         print('カタログ: odpt …', flush=True)
         feeds.update(catalog_odpt(manifest))
@@ -330,7 +388,12 @@ def main():
                     print(f'[{key}] {msg}', flush=True)
 
     # カタログから消えたフィードは台帳からも落とす(zip は残しても参照されない)
-    if not args.only:
+    #
+    # ただし今回の実行で引いていないカタログのぶんまで消してはいけない。
+    # --source fixed だけを流すと gtfs-data.jp/odpt 由来の576件が「カタログから
+    # 消えた」と誤判定されて台帳ごと吹き飛ぶ(実際に踏んだ)。全ソースを引いた
+    # ときだけ、台帳の掃除をする。
+    if not args.only and not args.source:
         stale = [k for k in manifest if k not in feeds and k not in failed]
         for k in stale:
             del manifest[k]
