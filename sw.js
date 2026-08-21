@@ -64,19 +64,19 @@ const CACHE_NAME = `transit-${VERSION}`;
 const SHELL = [
   './',
   './index.html',
-  './router_v3.js?v=13',
+  './router_v3.js?v=14',
   './platform_match.js?v=1',
-  './data_worker.js?v=2',
+  './data_worker.js?v=3',
   './manifest.json',
 ];
 
 // 大きい実データ。壊れた/古いものを混ぜて配ると誤った時刻を表示しかねないので、
 // これらは常に完全一致でしか返さない (ignoreSearch フォールバックの対象外)。
 const DATA = [
-  './graph_v2.json?v=6',
-  './trains_v3_meta.json?v=4',
+  './graph_v2.json?v=7',
+  './trains_v3_meta.json?v=5',
   './fares.json?v=11',
-  './trains_v3.bin.gz?v=4',
+  './trains_v3.bin.gz?v=5',
 ];
 
 // 無くても起動はできるもの。取得に失敗しても install を失敗させない。

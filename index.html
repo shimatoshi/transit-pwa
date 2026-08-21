@@ -564,7 +564,7 @@ body {
 <div class="credits" id="credits"></div>
 
 <script src="platform_match.js?v=1"></script>
-<script src="router_v3.js?v=13"></script>
+<script src="router_v3.js?v=14"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -655,12 +655,12 @@ function getDayType() {
 // この4本は vercel.json で immutable にしてある。中身を差し替えたら ?v= を必ず上げること。
 // 上げ忘れると、ブラウザのHTTPキャッシュが1年間古い方を返し続ける。
 const DATA_URLS = {
-  graph: 'graph_v2.json?v=6',
-  meta:  'trains_v3_meta.json?v=4',
+  graph: 'graph_v2.json?v=7',
+  meta:  'trains_v3_meta.json?v=5',
   fares: 'fares.json?v=11',
-  bin:   'trains_v3.bin.gz?v=4',
+  bin:   'trains_v3.bin.gz?v=5',
 };
-const WORKER_URL = 'data_worker.js?v=2';
+const WORKER_URL = 'data_worker.js?v=3';
 // のりば(ホーム番線)データ。無くても検索は動くので遅延ロード(失敗しても無視)
 const PLATFORMS_URL = 'platforms.json?v=1';
 let platformData = null;
