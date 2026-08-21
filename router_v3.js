@@ -74,6 +74,8 @@ const D = {
   fares: null,
   tripPaid: null, tripShink: null, // Uint8 per trip
   busConn: null,    // バス限定検索用のconn添字(遅延生成)
+  lineOp: null,     // 路線ごとの事業者名(遅延生成、事業者フィルタ用)
+  lineIsBus: null,  // 路線ごとのバス系統フラグ(遅延生成)
 };
 
 // trains_v3.bin の展開 → connection配列の構築。
@@ -206,6 +208,7 @@ function buildConnections(arrayBuffer, opts) {
 function adoptBuild(built, meta, stations, fares) {
   D.stations = stations;
   D.busConn = null;   // データを差し替えたら遅延生成キャッシュを捨てる
+  D.lineOp = null; D.lineIsBus = null;
   D.fares = fares || null;
   D.lines = meta.lines;
   D.types = meta.types;
@@ -304,7 +307,23 @@ function query(srcIdx, dstIdx, depMin, opts) {
   // busOnly はバス限定(鉄道を全部落とす)。noBus と同時指定は「バスも鉄道も無し」に
   // なって必ず経路なしになるので、意図が明確な busOnly を優先する。
   const busOnly = !!opts.busOnly && !!mode;
-  const noBus = !busOnly && !!opts.noBus && !!mode;   // バスを使わない
+  // 事業者フィルタ: opts.rail='jr'(JRのみ) / 'private'(私鉄のみ)。opts.operators は
+  // 事業者名の配列/Set(私鉄の絞り込み)。鉄道の絞り込みなのでバスも常に除外する。
+  // バスに事業者フィルタは無意味なので busOnly とは両立させず busOnly を優先。
+  const opSel = opts.operators ? Array.from(opts.operators) : null;
+  let lineAllow = null;
+  if (!busOnly && (opts.rail === 'jr' || opts.rail === 'private' || (opSel && opSel.length))) {
+    const ops = lineOpIndex();
+    lineAllow = new Uint8Array(ops.length);
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      if (!op) continue;   // バス系統(下の mode 除外と二重の保険)
+      if (opts.rail === 'jr') lineAllow[i] = op === 'JR' ? 1 : 0;
+      else if (opSel && opSel.length) lineAllow[i] = opSel.indexOf(op) >= 0 ? 1 : 0;
+      else lineAllow[i] = op !== 'JR' ? 1 : 0;   // private
+    }
+  }
+  const noBus = !busOnly && !!mode && (!!opts.noBus || !!lineAllow);   // バスを使わない
 
   const ns = D.stations.length;
   const arr = new Int32Array(ns).fill(INF);
@@ -334,6 +353,7 @@ function query(srcIdx, dstIdx, depMin, opts) {
     if (banLines && banLines.has(D.lines[D.tripLine[trip]])) continue;
     if (dayMask && !(D.tripCal[trip] & dayMask)) continue;   // 該当運転日でない列車を除外
     if (noBus && mode[trip] === 1) continue;
+    if (lineAllow && !lineAllow[D.tripLine[trip]]) continue;   // 事業者フィルタ
     if (!useShink && D.tripShink[trip]) continue;
     if (!useExpress && D.tripPaid[trip]) continue;
 
@@ -539,6 +559,59 @@ function lineCompany(line) {
   if (line.includes('東京メトロ')) return '東京メトロ';
   if (line.includes('都営')) return '都営地下鉄';
   return '';
+}
+
+// === 事業者(路線種別)判定 — 「JRのみ」「私鉄のみ」「特定事業者のみ」フィルタ用 ===
+// JR地域会社の区別は運賃計算(jrCompanyByGeo)に任せ、フィルタ上は 'JR' で一括する。
+// fares.json の会社キーには運賃テーブルの都合で分かれているものがあるので表示名に畳む
+const OPERATOR_CANON = {
+  '京成松戸線': '京成', '京成スカイアクセス': '京成',
+  '東急世田谷線': '東急', '東急こどもの国線': '東急',
+};
+
+function lineOperator(line) {
+  if (!line) return '';
+  // ＪＲ東西線(関西)は canonLine で「東西線」になり東京メトロに誤マッチするので名前を先に見る。
+  // 新幹線を含む全JR系統は「ＪＲ」始まりで、逆にＪＲ始まりの非JR路線は無い(データ検証済み)
+  if (/^(ＪＲ|JR)/.test(line)) return 'JR';
+  const co = lineCompany(line);
+  if (co) return co.indexOf('JR') === 0 ? 'JR' : (OPERATOR_CANON[co] || co);
+  // fares.json 未収録の地方私鉄・三セク(約100路線): 路線名の事業者部分を接尾辞で切り出す
+  // (「富山地方鉄道本線」→「富山地方鉄道」)。切り出せなければ路線名がそのまま事業者ブランド名
+  // (「あおなみ線」「リニモ」「金沢シーサイドライン」等)
+  const s = line.replace(/＜.+＞$/, '');   // 神戸高速線＜東西線＞/＜南北線＞ → 神戸高速線
+  const m = s.match(/^(.+?(?:鐵道|鉄道|電鉄|電気軌道|軌道|急行|交通|地下鉄|モノレール))./);
+  return m ? m[1] : s;
+}
+
+// 路線ごとの事業者名(バス系統は''=フィルタ対象外)。初回フィルタ検索時に遅延生成
+function lineOpIndex() {
+  if (D.lineOp) return D.lineOp;
+  const n = D.lines.length;
+  const isBus = new Uint8Array(n);
+  if (D.tripMode) {
+    for (let t = 0; t < D.tripLine.length; t++) {
+      if (D.tripMode[t] === 1) isBus[D.tripLine[t]] = 1;
+    }
+  }
+  const op = new Array(n);
+  for (let i = 0; i < n; i++) op[i] = isBus[i] ? '' : lineOperator(D.lines[i]);
+  D.lineOp = op; D.lineIsBus = isBus;
+  return op;
+}
+
+// UI用: 私鉄(非JR・非バス)の事業者一覧。[{name, lines}] を日本語コレーションの昇順で返す
+function railOperators() {
+  const ops = lineOpIndex();
+  const count = new Map();
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    if (!op || op === 'JR') continue;
+    count.set(op, (count.get(op) || 0) + 1);
+  }
+  const coll = (typeof Intl !== 'undefined' && Intl.Collator) ? new Intl.Collator('ja') : null;
+  const names = Array.from(count.keys()).sort(coll ? coll.compare : undefined);
+  return names.map(name => ({ name, lines: count.get(name) }));
 }
 
 // JR地域会社の判定: 路線名は「ＪＲ東海道本線」のように会社を跨ぐため、
@@ -1392,6 +1465,8 @@ const RouterV3 = {
   legKm,
   haversineKm,
   lineCompany,
+  lineOperator,
+  railOperators,
   timetable,
   get data() { return D; },
 };
