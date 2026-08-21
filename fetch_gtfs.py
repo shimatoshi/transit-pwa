@@ -28,6 +28,17 @@ from datetime import datetime, timezone
 BASE = os.path.dirname(os.path.abspath(__file__))
 
 # 再配布可(オフライン同梱可)なフィードのみ。追加時は license を必ず確認すること。
+#
+# 関西・中部・九州の大手事業者(大阪シティバス・西鉄バス・神戸市バス・京都市バス等)は
+# 「公共交通データHUBシステム」や ODPT の基本ライセンス(再配布制限あり)、または
+# 利用登録必須で配信されており、ここには載せられない。CC BY/CC0 で認証なし配信の
+# フィードに絞ると、政令市クラスでは北海道中央バス・じょうてつ・名古屋市バスのみが該当し、
+# 関西・九州は地域コミュニティバスが中心になる。
+#
+# 'url' 固定URL方式(都営バス/HODA/BODIK)に加え、'gtfs_data_jp' 方式
+# (organization_id, feed_id) を追加。GTFSデータリポジトリ(gtfs-data.jp)は
+# 改正のたびに配布URLの uid が変わる(署名付きS3 URL)ため、fetch 時に API から
+# 現行版(rid=current)の URL を都度解決する。
 FEEDS = {
     'toei': {
         'name': '都営バス',
@@ -40,6 +51,120 @@ FEEDS = {
         'attribution': '東京都交通局・公共交通オープンデータ協議会',
         'pref': '東京都',
     },
+    # ---- 北海道 ----
+    'hokkaido_chuo': {
+        'name': '北海道中央バス',
+        'operator': '北海道中央バス株式会社',
+        'url': 'https://ckan.hoda.jp/dataset/24d1dd70-5395-4d6b-b41f-0d83e8eabdb9/resource/dbadfccc-670e-49b9-be77-c3f346ee3160/download/hokkaido_chuo.zip',
+        'catalog': 'https://ckan.hoda.jp/dataset/gtfs-data/resource/dbadfccc-670e-49b9-be77-c3f346ee3160',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '北海道中央バス株式会社・北海道オープンデータポータル(HODA)',
+        'pref': '北海道',
+    },
+    'jotetsu': {
+        'name': 'じょうてつバス',
+        'operator': 'じょうてつ株式会社',
+        'url': 'https://ckan.hoda.jp/dataset/24d1dd70-5395-4d6b-b41f-0d83e8eabdb9/resource/fef98fef-6fe2-472f-bde3-9d4f0a509a4a/download/joutetsu.zip',
+        'catalog': 'https://ckan.hoda.jp/dataset/gtfs-data/resource/fef98fef-6fe2-472f-bde3-9d4f0a509a4a',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': 'じょうてつ株式会社・北海道オープンデータポータル(HODA)',
+        'pref': '北海道',
+    },
+    # ---- 中部 ----
+    'nagoya': {
+        'name': '名古屋市バス',
+        'operator': '名古屋市交通局',
+        'url': 'https://data.bodik.jp/dataset/c5794008-8053-42ab-99b9-ee7f6fdf9a9e/resource/125a1d12-7df6-489c-abde-911856e05d1b/download/20260328_bus-gtfs-jp.zip',
+        'catalog': 'https://data.bodik.jp/dataset/231002_7109030000_bus-gtfs-jp',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '名古屋市交通局',
+        'pref': '愛知県',
+    },
+    'toyota_oiden': {
+        'name': 'とよたおいでんバス',
+        'operator': '豊田市',
+        'gtfs_data_jp': {'org': 'toyotacity', 'feed': 'kikanbus'},
+        'catalog': 'https://gtfs-data.jp/organizations/toyotacity/feeds/kikanbus',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '豊田市',
+        'pref': '愛知県',
+    },
+    # ---- 関西(大手は認証なし再配布可のフィードが無いため、兵庫県内のコミュニティバスで代替) ----
+    'nishinomiya_sakura': {
+        'name': 'さくらやまなみバス',
+        'operator': '西宮市',
+        'gtfs_data_jp': {'org': 'nishinomiyacity', 'feed': 'sakurayamanami'},
+        'catalog': 'https://gtfs-data.jp/organizations/nishinomiyacity/feeds/sakurayamanami',
+        'license': 'CC BY 2.1 JP',
+        'license_url': 'https://creativecommons.org/licenses/by/2.1/jp/',
+        'attribution': '西宮市',
+        'pref': '兵庫県',
+    },
+    'akashi_tako': {
+        'name': 'たこバス・たこバスミニ',
+        'operator': '明石市',
+        'gtfs_data_jp': {'org': 'akashicity', 'feed': 'tacobustacobusmini'},
+        'catalog': 'https://gtfs-data.jp/organizations/akashicity/feeds/tacobustacobusmini',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '明石市',
+        'pref': '兵庫県',
+    },
+    'kakogawa_kako': {
+        'name': 'かこバス・かこバスミニ',
+        'operator': '加古川市',
+        'gtfs_data_jp': {'org': 'kakogawacity', 'feed': 'kakobuskakobusmini'},
+        'catalog': 'https://gtfs-data.jp/organizations/kakogawacity/feeds/kakobuskakobusmini',
+        'license': 'CC BY 2.1 JP',
+        'license_url': 'https://creativecommons.org/licenses/by/2.1/jp/',
+        'attribution': '加古川市',
+        'pref': '兵庫県',
+    },
+    # ---- 九州(西鉄バス・北九州市営バスは認証必須の公共交通HUBシステム配信のため対象外) ----
+    'dazaifu_mahoroba': {
+        'name': 'まほろば号',
+        'operator': '太宰府市',
+        'gtfs_data_jp': {'org': 'dazaifucity', 'feed': 'DazaifuCityCommunityBus'},
+        'catalog': 'https://gtfs-data.jp/organizations/dazaifucity/feeds/DazaifuCityCommunityBus',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '太宰府市',
+        'pref': '福岡県',
+    },
+    'kasuga_yayoi': {
+        'name': 'コミュニティバスやよい',
+        'operator': '春日市',
+        'gtfs_data_jp': {'org': 'kasugacity', 'feed': 'yayoi_kasuga'},
+        'catalog': 'https://gtfs-data.jp/organizations/kasugacity/feeds/yayoi_kasuga',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '春日市',
+        'pref': '福岡県',
+    },
+    'munakata_community': {
+        'name': '宗像市コミュニティバス',
+        'operator': '宗像市',
+        'gtfs_data_jp': {'org': 'munakatacity', 'feed': 'MunakataCityCommunityBus'},
+        'catalog': 'https://gtfs-data.jp/organizations/munakatacity/feeds/MunakataCityCommunityBus',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '宗像市',
+        'pref': '福岡県',
+    },
+    'munakata_fureai': {
+        'name': '宗像市ふれあいバス',
+        'operator': '宗像市',
+        'gtfs_data_jp': {'org': 'munakatacity', 'feed': 'MunakataCityFureaiBus'},
+        'catalog': 'https://gtfs-data.jp/organizations/munakatacity/feeds/MunakataCityFureaiBus',
+        'license': 'CC BY 4.0',
+        'license_url': 'https://creativecommons.org/licenses/by/4.0/deed.ja',
+        'attribution': '宗像市',
+        'pref': '福岡県',
+    },
 }
 
 UA = 'transit-pwa gtfs fetcher (+https://github.com/shimatoshi/transit-pwa)'
@@ -49,6 +174,17 @@ def fetch(url, timeout=300):
     req = urllib.request.Request(url, headers={'User-Agent': UA})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
+
+
+def resolve_gtfs_data_jp_url(org, feed_id):
+    """GTFSデータリポジトリ(gtfs-data.jp)の現行版(rid=current)ダウンロードURLを解決する。
+    配布URLは署名付きS3 URLで改正のたびに uid が変わるため、API から都度引く。"""
+    api = f'https://api.gtfs-data.jp/v2/organizations/{org}/feeds/{feed_id}'
+    body = json.loads(fetch(api))['body']
+    for gf in body['gtfs_files']:
+        if gf['rid'] == 'current':
+            return gf['gtfs_url']
+    sys.exit(f'{org}/{feed_id}: rid=current が見つからない')
 
 
 def feed_info(zip_bytes):
@@ -92,8 +228,13 @@ def main():
         spec = FEEDS[key]
         zpath = os.path.join(args.out, f'{key}.zip')
         prev = manifest.get(key, {})
-        print(f'[{key}] {spec["url"]}')
-        data = fetch(spec['url'])
+        if 'gtfs_data_jp' in spec:
+            gd = spec['gtfs_data_jp']
+            url = resolve_gtfs_data_jp_url(gd['org'], gd['feed'])
+        else:
+            url = spec['url']
+        print(f'[{key}] {url}')
+        data = fetch(url)
         sha = hashlib.sha256(data).hexdigest()
         if not args.force and prev.get('sha256') == sha and os.path.exists(zpath):
             print(f'  unchanged (sha256 {sha[:12]}…, {len(data)/1e6:.2f}MB)')
@@ -101,8 +242,9 @@ def main():
         with open(zpath, 'wb') as f:
             f.write(data)
         entry = {k: spec[k] for k in
-                 ('name', 'operator', 'url', 'catalog', 'license', 'license_url',
+                 ('name', 'operator', 'catalog', 'license', 'license_url',
                   'attribution', 'pref')}
+        entry['url'] = url
         entry.update({
             'file': f'{key}.zip',
             'sha256': sha,

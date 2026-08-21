@@ -51,8 +51,13 @@ function railId(name) {
   for (let i = 0; i < S.length; i++) if (!S[i].m && strip(S[i].n) === strip(name)) return i;
   return -1;
 }
+// 事業者拡充で県外に同名バス停が増えた(例: 大塚 = 東京都豊島区の駅名だが、
+// バス停としては愛知県名古屋市にのみ存在する)。このテストのケースは全て
+// 都営バスの営業エリアなので、東京都のバス停以外は該当なし(-1)として扱う。
 function busId(name) {
-  for (let i = 0; i < S.length; i++) if (S[i].m && S[i].n === name) return i;
+  for (let i = 0; i < S.length; i++) {
+    if (S[i].m && S[i].n === name && S[i].p === '東京都') return i;
+  }
   return -1;
 }
 
