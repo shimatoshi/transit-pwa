@@ -221,6 +221,11 @@ if (!fs.existsSync(BASELINE_PATH)) {
   for (const [k, b] of Object.entries(base.results)) {
     const n = now[k];
     if (b === 'NOSTATION' || n === 'NOSTATION') continue;
+    // baseline作成時(単日探索)は「経路なし」だったが、複数日ロールオーバー探索
+    // (Issue #14)で終電後や超長距離にも翌日接続の経路が出るようになった。
+    // 「無→有」は改善であって回帰ではないので差分扱いしない
+    // (「有→無」や到着悪化は従来どおり worse で検出する)。
+    if (!b && n) continue;
     const bSig = b && b.sig, nSig = n && n.sig;
     if (bSig === nSig) continue;
     changed.push(k);

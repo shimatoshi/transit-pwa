@@ -660,7 +660,7 @@ const DATA_URLS = {
   fares: 'fares.json?v=11',
   bin:   'trains_v3.bin.gz?v=4',
 };
-const WORKER_URL = 'data_worker.js?v=1';
+const WORKER_URL = 'data_worker.js?v=2';
 // のりば(ホーム番線)データ。無くても検索は動くので遅延ロード(失敗しても無視)
 const PLATFORMS_URL = 'platforms.json?v=1';
 let platformData = null;
@@ -1240,12 +1240,10 @@ function findAllByName(name) {
   return exact.length ? exact : loose;
 }
 
-// CSAのconnectionは当日分 + 深夜帯(発<06:00)を+1440複製した範囲しか無いので、探索が
-// 辿れるのは概ね翌朝6時まで。宿泊を挟む行程 — 稚内→博多、根室→長崎のような超長距離 —
-// は構造上かならず「経路なし」になる。素の「見つかりません」だとデータ欠落と区別が
-// 付かないので、遠すぎるODでは理由と回避策(途中駅で区切る)を出す。
-// 閾値は実測(稚内→新大阪 直線1298kmは当日中に引ける / 稚内→広島 直線1453kmは出ない)より
-// 手前に置く。これ未満で経路が出ないのは時刻表データ側の欠落なので、誤ったヒントを出さない。
+// 複数日ロールオーバー探索(router_v3 の query が当日+2日分の接続を辿る)導入後は、
+// 宿泊を挟む超長距離(稚内→博多 等)も経路が引けるようになった(Issue #14)。
+// それでも超長距離で経路が出ない場合は時刻表データ欠落の可能性が高いが、原因の
+// 切り分け(どの区間で途切れているか)には区切り検索が有効なので、その案内だけ残す。
 const OVERNIGHT_KM = 1200;
 function overnightHint(fromId, toId) {
   const a = graph.stations[fromId], b = graph.stations[toId];
@@ -1253,8 +1251,8 @@ function overnightHint(fromId, toId) {
   const km = RouterV3.haversineKm(a.la, a.lo, b.la, b.lo);
   if (km < OVERNIGHT_KM) return '';
   return `<div style="margin-top:8px;font-size:12px;color:var(--muted)">直線距離で約${Math.round(km)}kmあります。` +
-    `この検索は当日中に乗り継げる列車しか辿らないため、宿泊を挟む行程は経路が出ません。` +
-    `途中の主要駅(東京・新大阪・博多など)で区切って検索してください。</div>`;
+    `検索は出発から3日分の乗り継ぎまで辿りますが、この距離では時刻表データの欠落で経路が組めていない可能性があります。` +
+    `途中の主要駅(東京・新大阪・博多など)で区切って検索すると、どの区間が原因か切り分けられます。</div>`;
 }
 
 // === Search ===
@@ -1639,7 +1637,12 @@ function doSearch() {
 function formatTime(minutes) {
   const h = Math.floor(minutes / 60) % 24;
   const m = minutes % 60;
-  return `${String(h).padStart(2,'0')}:${String(Math.round(m)).padStart(2,'0')}`;
+  // 日跨ぎ(複数日ロールオーバー探索)の時刻は「翌」「2日後」を付けて区別する。
+  // 従来も深夜帯複製で最大30:00(=翌06:00)までは素の時計時刻で出していたが、
+  // 宿泊を挟む経路が出るようになったので日数を明示しないと誤解する。
+  const day = Math.floor(minutes / 1440);
+  const mark = day >= 2 ? `${day}日後` : day === 1 ? '翌' : '';
+  return `${mark}${String(h).padStart(2,'0')}:${String(Math.round(m)).padStart(2,'0')}`;
 }
 
 function getSearchTime() {
@@ -1840,7 +1843,7 @@ function renderOneRoute(j, index) {
         const t = s.d != null ? s.d : s.a;
         const nm = graph.stations[s.st] ? graph.stations[s.st].n : '?';
         midHtml += `<div style="font-size:12px;color:var(--muted);padding:2px 0">
-          <span style="display:inline-block;width:42px;color:var(--text)">${t != null ? formatTime(t) : '—'}</span>${nm}</div>`;
+          <span style="display:inline-block;min-width:42px;color:var(--text)">${t != null ? formatTime(t) : '—'}</span>${nm}</div>`;
       }
       midHtml += `</div>`;
     }

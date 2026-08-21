@@ -55,7 +55,9 @@
 //       PR #24 も独立に v46 を名乗っていたため v54 に繰り上げた。
 // v55 = 経路検索結果に乗車・降車のホーム番号(のりば)を表示 (platforms.json / platform_match.js)。
 //       PR #20 も独立に v46 を名乗っていたため v55 に繰り上げた。
-const VERSION = 'v55';
+// v56 = 複数日ロールオーバー探索(宿泊を挟む超長距離、data_worker.js ?v=2)。
+//       PR #26 も独立に v46 を名乗っていたため v56 に繰り上げた。
+const VERSION = 'v56';
 const CACHE_NAME = `transit-${VERSION}`;
 
 // アプリの外枠。これが無いと起動すらできない。
@@ -64,7 +66,7 @@ const SHELL = [
   './index.html',
   './router_v3.js?v=13',
   './platform_match.js?v=1',
-  './data_worker.js?v=1',
+  './data_worker.js?v=2',
   './manifest.json',
 ];
 
