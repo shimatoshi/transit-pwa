@@ -1131,6 +1131,11 @@ function doSearch() {
     day: getDayType(),               // 運転日フィルタ(0平日/1土/2休)
   };
   lastSearchOpts = opts;             // 前の便/次の便で再利用
+  // 到着/出発の時刻指定を覚えておき、どのソートモードでも第2キーとして
+  // 「指定時刻に近い順」を効かせる(now指定=時刻未指定のときは効かせない)
+  searchTimeCtx = st.explicit
+    ? { type: st.type, minutes: st.minutes }
+    : null;
 
   // 到着指定: 指定時刻までに着く最遅出発を二分探索
   function latestDeparture(f, t, arrBy) {
@@ -1239,11 +1244,11 @@ function getSearchTime() {
 
   if (type === 'now' || !timeInput) {
     const now = new Date();
-    return { type: 'dep', minutes: now.getHours() * 60 + now.getMinutes() };
+    return { type: 'dep', minutes: now.getHours() * 60 + now.getMinutes(), explicit: false };
   }
 
   const [h, m] = timeInput.split(':').map(Number);
-  return { type, minutes: h * 60 + m };
+  return { type, minutes: h * 60 + m, explicit: true };
 }
 
 // Line color hash for visual distinction
@@ -1460,15 +1465,28 @@ function shiftTrain(index, dir) {
 
 let currentSort = 'fast';   // fast=早い / cheap=安い / transfer=乗換少
 let showAllRoutes = false;
+let searchTimeCtx = null;   // 時刻指定検索時 {type:'arr'|'dep', minutes} / 未指定はnull
 
 function fareOf(j) {         // 運賃をキャッシュ(ソート用)。席種を変えたら setSeat が捨てる
   if (j._fare == null) j._fare = RouterV3.journeyFare(j, { seat: currentSeat() }).total;
   return j._fare;
 }
+// 指定時刻(到着ならarr/出発ならdep)との差の絶対値。指定が近いほど小さい。
+// 時刻未指定のときは0を返し、ソート順に影響を与えない。
+function timeProximity(j) {
+  if (!searchTimeCtx) return 0;
+  const t = searchTimeCtx.type === 'arr' ? j.arr : j.dep;
+  return Math.abs(t - searchTimeCtx.minutes);
+}
+// 第1キー(選択中のソートモードの基準)が同点のとき、指定時刻に近い順を
+// 第2優先軸として挿入する。これにより早い順・安い順・乗換少のどれを選んでも、
+// 第1キーが並ぶ帯の中では指定時刻(到着なら到着時刻・出発なら出発時刻)に最も
+// 近い便が上位へ来る。第1キーの基準自体は従来のまま維持する。
+// (comparator の推移律を保つため第1キーは量子化せず厳密比較のまま扱う)
 const SORTERS = {
-  fast: (a, b) => (a.arr - b.arr) || (a.transfers - b.transfers) || (b.dep - a.dep),
-  cheap: (a, b) => (fareOf(a) - fareOf(b)) || (a.arr - b.arr) || (a.transfers - b.transfers),
-  transfer: (a, b) => (a.transfers - b.transfers) || (a.arr - b.arr) || (fareOf(a) - fareOf(b)),
+  fast: (a, b) => (a.arr - b.arr) || (timeProximity(a) - timeProximity(b)) || (a.transfers - b.transfers) || (b.dep - a.dep),
+  cheap: (a, b) => (fareOf(a) - fareOf(b)) || (timeProximity(a) - timeProximity(b)) || (a.arr - b.arr) || (a.transfers - b.transfers),
+  transfer: (a, b) => (a.transfers - b.transfers) || (timeProximity(a) - timeProximity(b)) || (a.arr - b.arr) || (fareOf(a) - fareOf(b)),
 };
 const SORT_LABELS = { fast: '早い順', cheap: '安い順', transfer: '乗換少' };
 
