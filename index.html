@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>乗換案内</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0f172a">
@@ -13,7 +13,7 @@
   --bg: #f1f5f9;
   --card: #fff;
   --text: #1e293b;
-  --muted: #94a3b8;
+  --muted: #64748b;
   --border: #e2e8f0;
   --green: #16a34a;
   --orange: #ea580c;
@@ -466,6 +466,23 @@ body {
   text-align: center;
 }
 .credits a { color: var(--muted); }
+/* タップ領域・読みやすさ・狭い画面での入力 */
+button:focus-visible, select:focus-visible, input:focus-visible {
+  outline: 2px solid var(--blue); outline-offset: 2px;
+}
+.field-input input { min-height: 44px; padding-right: 48px; }
+.field-clear { width: 44px; height: 44px; right: 0; background: transparent; color: #475569; font-size: 20px; }
+.remove-via, .add-via-btn, .swap-btn, .mode-btn, .rail-btn { min-width: 44px; min-height: 44px; }
+.opt-toggles label { min-height: 44px; }
+.opt-toggles select, .opt-toggles input[type="number"] { min-height: 44px; }
+.time-selector { flex-wrap: wrap; }
+.time-selector select, .time-selector input { min-height: 44px; min-width: 0; max-width: 100%; font-size: 16px; }
+.time-selector input[type="date"] { flex: 1 1 130px; }
+.ac-item { min-height: 44px; }
+.header .badge { font-size: 12px; }
+@media (min-width: 820px) {
+  .search-card, #results, .status-bar, .credits { max-width: 800px; margin-left: auto; margin-right: auto; }
+}
 </style>
 </head>
 <body>
@@ -501,13 +518,13 @@ body {
   </div>
   <!-- Time selector -->
   <div class="time-selector">
-    <select id="time-type">
+    <select id="time-type" aria-label="時刻の指定方法">
       <option value="dep">出発</option>
       <option value="arr">到着</option>
       <option value="now">現在時刻</option>
     </select>
-    <input type="time" id="time-input" value="">
-    <input type="date" id="date-input" value="">
+    <input type="time" id="time-input" aria-label="検索する時刻" onchange="useEnteredTime()" value="">
+    <input type="date" id="date-input" aria-label="検索する日付" value="">
   </div>
   <div class="controls">
     <button class="add-via-btn" onclick="addVia()">+ 経由駅</button>
@@ -559,7 +576,7 @@ body {
   </div>
 </div>
 
-<div class="status-bar" id="status">データ読み込み中...</div>
+<div class="status-bar" id="status" role="status">データ読み込み中...</div>
 <!-- 出典表示。CC BY 系のデータは表示が義務なので trains_v3_meta.json の sources から生成する -->
 <div class="credits" id="credits"></div>
 
@@ -570,6 +587,12 @@ body {
 let graph = null;
 let freqData = null;
 const selectedStations = {}; // fieldId -> stationIndex
+
+// 入力した時刻が「現在時刻」の設定で無視されないようにする。
+function useEnteredTime() {
+  const type = document.getElementById('time-type');
+  if (type.value === 'now') type.value = 'dep';
+}
 
 // Set default time to now
 document.addEventListener('DOMContentLoaded', () => {
@@ -1116,6 +1139,9 @@ function setupFieldAC(row) {
   const input = row.querySelector('input');
   const dropdown = row.querySelector('.ac-dropdown');
   if (!input || !dropdown) return;
+  const label = { dep: '出発駅', arr: '到着駅', via: '経由駅' }[row.dataset.role];
+  input.setAttribute('aria-label', label);
+  row.querySelector('.field-clear').setAttribute('aria-label', label + 'を消去');
 
   const fieldId = input.closest('.field-row').dataset.role + '-' +
     Array.from(document.querySelectorAll('.field-row')).indexOf(input.closest('.field-row'));
@@ -1174,7 +1200,7 @@ function addVia() {
       <button class="field-clear" onclick="clearField(this)">&times;</button>
       <div class="ac-dropdown"></div>
     </div>
-    <button class="remove-via" onclick="removeVia(this)">&times;</button>
+    <button class="remove-via" aria-label="経由駅を削除" onclick="removeVia(this)">&times;</button>
   `;
   arrRow.parentNode.insertBefore(via, arrRow);
   setupFieldAC(via);
