@@ -836,7 +836,7 @@ async function loadData() {
         pref: s.p,
         // バス停は路線名(l)を持たず系統名(sys)を持つ。路線色ロジックが系統名で
         // 暴発しないようキーを分けてある
-        lines: s.m ? (s.sys || []) : s.l,
+        lines: stationDisplayLines(s),
         mode: s.m ? 1 : 0,
       });
     }
@@ -1082,6 +1082,13 @@ function normName(s) {
     .toLowerCase();
 }
 
+// 運行系統(l)は直通先の路線まで含む。駅候補には駅が実際に属する路線(wl)を表示。
+function stationDisplayLines(station) {
+  if (station.m) return station.sys || [];
+  const lines = (station.wl || []).filter(name => name !== station.n && !/(駅|線内)$/.test(name));
+  return lines.length ? lines : (station.l || []);
+}
+
 function searchStations(query) {
   if (!graph || query.length < 1) return [];
   const q = foldLatin(query);      // 英字名(e)との比較用
@@ -1159,7 +1166,7 @@ function setupFieldAC(row) {
       <div class="ac-item" data-id="${s.id}">
         <div>
           <div class="ac-name">${s.mode === 1 ? '&#128652; ' : ''}${s.name}</div>
-          <div class="ac-sub">${s.mode === 1 ? 'バス停 / ' : ''}${s.pref ? s.pref + ' / ' : ''}${s.lines.length ? s.lines[0] : ''}</div>
+          <div class="ac-sub">${s.mode === 1 ? 'バス停 / ' : ''}${s.pref ? s.pref + ' / ' : ''}${s.lines.join('・')}</div>
         </div>
       </div>
     `).join('');
