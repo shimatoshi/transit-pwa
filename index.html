@@ -1602,7 +1602,40 @@ function doSearch() {
     }
     renderMultipleResults(journeys, true);
   } else {
-    // 経由駅: 区間ごとに最早到着を連結
+    // 到着指定の経由検索は終点から逆向きに、締切以前の最遅出発を選ぶ。
+    // 出発指定と同じ前向き探索では、到着時刻から出発してしまう。
+    const segments = [];
+    if (st.type === 'arr') {
+      let arriveBy = st.minutes, requiredTo = null;
+      for (let i = waypointCandidates.length - 2; i >= 0; i--) {
+        let best = null, bestFrom = null;
+        const toIds = requiredTo === null ? waypointCandidates[i + 1] : [requiredTo];
+        for (const fid of waypointCandidates[i]) {
+          for (const tid of toIds) {
+            if (fid === tid) continue;
+            const j = latestDeparture(fid, tid, arriveBy);
+            if (j && (!best || j.dep > best.dep)) { best = j; bestFrom = fid; }
+          }
+        }
+        if (!best) {
+          document.getElementById('results').innerHTML = '<div class="no-route">指定した到着時刻までの経路が見つかりません</div>';
+          return;
+        }
+        segments.unshift(best);
+        requiredTo = bestFrom;
+        arriveBy = best.dep - 4;
+      }
+      const combined = { ...segments[0], legs: [...segments[0].legs] };
+      for (const segment of segments.slice(1)) {
+        combined.legs.push(...segment.legs);
+        combined.arr = segment.arr;
+        combined.transfers += segment.transfers + 1;
+      }
+      RouterV3.annotateBudget(combined, opts);
+      renderMultipleResults([combined], false);
+      return;
+    }
+    // 出発指定の経由駅: 区間ごとに最早到着を連結
     let combined = null;
     let depMin = st.minutes;
     for (let i = 0; i < waypointCandidates.length - 1; i++) {
