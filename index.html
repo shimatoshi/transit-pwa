@@ -1715,6 +1715,10 @@ function doSearch() {
     return;
   }
 
+  for (const row of rows) {
+    const dropdown = row.querySelector('.ac-dropdown');
+    if (dropdown?.classList) hideDropdown(row, dropdown);
+  }
   updateTimeUI();
   const st = getSearchTime();
   resultContext = Array.from(rows).map(row => row.querySelector('input').value.trim()).filter(Boolean).join(' → ') +
