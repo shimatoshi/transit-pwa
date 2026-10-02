@@ -1,0 +1,7 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Transit UI responsive QA</title>
+<style>body{margin:16px;font:16px system-ui;background:#e2e8f0}label{margin-right:20px}select{font:inherit;padding:8px}iframe{display:block;border:1px solid #64748b;margin-top:16px;height:1200px;background:white}</style>
+<label>画面幅 <select id="width" onchange="frame.style.width=this.value+'px'"><option>320</option><option selected>390</option><option>820</option></select></label>
+<label>文字サイズ <select id="text-size" onchange="applySize()"><option value="100">100%</option><option value="200">200%</option></select></label>
+<iframe id="frame" title="乗換案内の検証画面" src="../index.html" style="width:390px" onload="applySize()"></iframe>
+<script>const frame=document.getElementById('frame');function applySize(){frame.contentDocument.documentElement.style.fontSize=document.getElementById('text-size').value+'%';}</script>
+</html>

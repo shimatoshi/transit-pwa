@@ -483,6 +483,84 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 @media (min-width: 820px) {
   .search-card, #results, .status-bar, .credits { max-width: 800px; margin-left: auto; margin-right: auto; }
 }
+
+/* Primary flow: endpoints, departure time, search; optional filters disclose on demand. */
+:root { --muted: #475569; }
+body { font-size: 1rem; line-height: 1.5; }
+button, input, select, summary { font: inherit; }
+button, summary { touch-action: manipulation; }
+button, summary, a:focus-visible, [role="button"]:focus-visible { outline-offset: 3px; }
+summary:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline: 2px solid var(--blue); }
+[hidden] { display: none !important; }
+.search-card { overflow: visible; border: 1px solid var(--border); box-shadow: 0 2px 8px #0f172a08; }
+.station-fields { padding: 16px 16px 0; }
+.field-row { align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+.field-label { width: 3.5rem; height: 48px; background: none !important; color: var(--text); font-size: .875rem; border-radius: 0; }
+.field-input { min-width: 0; }
+.field-input input { font-size: 1rem; min-height: 48px; background: white; }
+.field-input input[aria-invalid="true"] { border-color: var(--red); }
+.field-error { color: #b91c1c; font-size: .875rem; padding-top: 6px; }
+.ac-dropdown { position: static; margin-top: 8px; max-height: 240px; }
+.ac-item { width: 100%; border: 0; border-bottom: 1px solid var(--border); text-align: left; background: white; }
+.ac-item:hover, .ac-item:focus { background: #eff6ff; }
+.ac-item .ac-name { font-size: 1rem; }
+.ac-item .ac-sub { font-size: .875rem; line-height: 1.5; }
+.controls { padding: 0 16px 12px; border: 0; flex-wrap: wrap; }
+.controls button { flex: 1 1 145px; }
+.add-via-btn, .swap-btn { font-size: .875rem; border-style: solid; padding: 8px 12px; }
+.time-selector { padding: 12px 16px; gap: 8px; }
+.time-selector > label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 125px; font-size: .875rem; min-width: 0; }
+.time-selector select, .time-selector input { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: white; }
+.time-selector input[type="date"], .time-selector input[type="time"] { flex: none; height: auto; min-height: 48px; font-size: 1rem; }
+.time-selector select, .time-selector input { font-size: 1rem; }
+.time-hint { font-size: .875rem; color: var(--muted); flex: 1 1 100%; }
+.advanced { border-top: 1px solid var(--border); }
+.advanced > summary { padding: 12px 16px; cursor: pointer; font-size: .875rem; min-height: 48px; }
+.advanced > summary::marker { color: var(--blue); }
+.filter-summary { display: block; padding-left: 18px; margin-top: 4px; color: var(--muted); font-size: .875rem; font-weight: 400; overflow-wrap: anywhere; }
+.filter-group { padding: 4px 16px 12px; }
+.filter-group h2 { font-size: .875rem; font-weight: 600; margin-bottom: 8px; }
+.mode-toggles, .rail-toggles { padding: 0; margin-bottom: 8px; }
+.mode-btn, .rail-btn { font-size: .875rem; padding: 8px 4px; }
+.op-picker { padding: 0; }
+.op-summary { width: 100%; text-align: left; min-height: 44px; font-size: .875rem; }
+.op-search, .op-item, .op-actions button { font-size: .875rem; min-height: 44px; }
+.opt-toggles { padding: 0 16px 12px; gap: 8px 16px; font-size: .875rem; color: var(--text); }
+.opt-toggles label { gap: 8px; }
+.opt-toggles input[type="checkbox"] { width: 20px; height: 20px; }
+.opt-toggles input[type="number"] { width: 108px; font-size: 1rem; text-align: left; }
+.opt-toggles select { font-size: 1rem; }
+.filter-note { color: var(--muted); font-size: .875rem; padding: 0 16px 12px; }
+.search-btn { font-size: 1rem; width: calc(100% - 32px); margin: 4px 16px 16px; border-radius: 10px; min-height: 48px; }
+.result-heading { font-size: 1.125rem; padding: 12px 4px 4px; }
+.result-context { font-size: .875rem; color: var(--muted); padding: 0 4px 8px; overflow-wrap: anywhere; }
+.result-notice { padding: 12px; margin-bottom: 12px; background: #fffbeb; color: #854d0e; border: 1px solid #fcd34d; border-radius: 8px; font-size: .875rem; }
+.route-summary { flex-wrap: wrap; gap: 8px; border-bottom: 0; }
+.route-summary > div { min-width: 0; }
+.route-overview { font-size: 1.125rem; font-weight: 700; color: var(--blue); }
+.route-meta { font-size: .875rem; color: var(--muted); }
+.route-detail { border-top: 1px solid var(--border); padding-top: 12px; }
+.route-open { min-height: 44px; width: calc(100% - 32px); margin: 0 16px 12px; background: #eff6ff; color: var(--blue-dark); border: 1px solid #bfdbfe; border-radius: 8px; font-size: .875rem; cursor: pointer; }
+.train-shift { display: flex; gap: 8px; padding: 0 16px 12px; }
+.train-shift button { flex: 1; min-height: 44px; background: white; border: 1px solid var(--border); border-radius: 8px; font-size: .875rem; color: var(--blue-dark); cursor: pointer; }
+.route-lines { padding: 0 16px 10px; font-size: .875rem; line-height: 1.8; }
+.step-station { font-size: 1rem; }
+.step-info { font-size: .875rem; }
+.step-info .line-tag { font-size: .875rem; }
+.empty-state { padding: 16px 20px; }
+.empty-state .icon { display: none; }
+.empty-state p { font-size: .875rem; }
+.status-bar, .credits { font-size: .75rem; }
+.sort-bar { display: flex; gap: 6px; padding: 4px 0 12px; }
+.sort-bar button { flex: 1; min-height: 44px; font-size: .875rem; }
+@media (max-width: 380px) {
+  .search-card { margin: 8px; }
+  .station-fields { padding: 12px 12px 0; }
+  .field-label { width: 3rem; }
+  .route-summary { padding: 12px; }
+  .route-overview { font-size: 1rem; }
+}
+
 </style>
 </head>
 <body>
@@ -499,50 +577,60 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   <div class="station-fields" id="station-fields">
     <!-- Departure -->
     <div class="field-row" data-role="dep">
-      <span class="field-label dep">発</span>
+      <label class="field-label dep" for="dep-station">出発</label>
       <div class="field-input">
-        <input type="text" placeholder="出発駅" autocomplete="off">
+        <input type="text" id="dep-station" aria-label="出発駅" placeholder="駅名・バス停名" autocomplete="off">
         <button class="field-clear" onclick="clearField(this)">&times;</button>
         <div class="ac-dropdown"></div>
       </div>
     </div>
     <!-- Arrival -->
     <div class="field-row" data-role="arr">
-      <span class="field-label arr">着</span>
+      <label class="field-label arr" for="arr-station">到着</label>
       <div class="field-input">
-        <input type="text" placeholder="到着駅" autocomplete="off">
+        <input type="text" id="arr-station" aria-label="到着駅" placeholder="駅名・バス停名" autocomplete="off">
         <button class="field-clear" onclick="clearField(this)">&times;</button>
         <div class="ac-dropdown"></div>
       </div>
     </div>
   </div>
-  <!-- Time selector -->
-  <div class="time-selector">
-    <select id="time-type" aria-label="時刻の指定方法">
-      <option value="dep">出発</option>
-      <option value="arr">到着</option>
-      <option value="now">現在時刻</option>
-    </select>
-    <input type="time" id="time-input" aria-label="検索する時刻" onchange="useEnteredTime()" value="">
-    <input type="date" id="date-input" aria-label="検索する日付" value="">
-  </div>
   <div class="controls">
-    <button class="add-via-btn" onclick="addVia()">+ 経由駅</button>
-    <button class="swap-btn" onclick="swapDepArr()">入替</button>
+    <button type="button" class="add-via-btn" onclick="addVia()">+ 経由地を追加</button>
+    <button type="button" class="swap-btn" onclick="swapDepArr()">出発・到着を入替</button>
   </div>
+  <div class="time-selector">
+    <label>いつ移動するか
+      <select id="time-type" aria-label="時刻の指定方法" onchange="updateTimeUI();markSearchDirty()">
+        <option value="now">今すぐ出発</option>
+        <option value="dep">出発時刻を指定</option>
+        <option value="arr">到着時刻を指定</option>
+      </select>
+    </label>
+    <label id="date-control" hidden>日付
+      <input type="date" id="date-input" aria-label="検索する日付" value="">
+    </label>
+    <label id="time-control" hidden>時刻
+      <input type="time" id="time-input" aria-label="検索する時刻" onchange="useEnteredTime()" value="">
+    </label>
+    <p class="time-hint" id="time-hint">今日の現在時刻で検索します</p>
+  </div>
+  <details class="advanced" id="search-options">
+    <summary>検索条件<span class="filter-summary" id="filter-summary"></span></summary>
+    <div class="filter-group">
+      <h2>交通手段</h2>
   <div class="mode-toggles" id="mode-toggles">
-    <button type="button" class="mode-btn on" data-mode="all" onclick="setTravelMode('all')">すべて</button>
-    <button type="button" class="mode-btn" data-mode="rail" onclick="setTravelMode('rail')">&#128649; 鉄道のみ</button>
-    <button type="button" class="mode-btn" data-mode="bus" onclick="setTravelMode('bus')">&#128652; バスのみ</button>
+    <button type="button" class="mode-btn on" aria-pressed="true" data-mode="all" onclick="setTravelMode('all')">鉄道＋バス</button>
+    <button type="button" class="mode-btn" aria-pressed="false" data-mode="rail" onclick="setTravelMode('rail')">&#128649; 鉄道のみ</button>
+    <button type="button" class="mode-btn" aria-pressed="false" data-mode="bus" onclick="setTravelMode('bus')">&#128652; バスのみ</button>
   </div>
   <!-- 鉄道のみモードの詳細: JR/私鉄の路線種別と、私鉄の事業者絞り込み -->
   <div class="rail-toggles" id="rail-toggles" hidden>
-    <button type="button" class="rail-btn on" data-rail="all" onclick="setRailFilter('all')">全事業者</button>
-    <button type="button" class="rail-btn" data-rail="jr" onclick="setRailFilter('jr')">JRのみ</button>
-    <button type="button" class="rail-btn" data-rail="private" onclick="setRailFilter('private')">私鉄のみ</button>
+    <button type="button" class="rail-btn on" aria-pressed="true" data-rail="all" onclick="setRailFilter('all')">全事業者</button>
+    <button type="button" class="rail-btn" aria-pressed="false" data-rail="jr" onclick="setRailFilter('jr')">JRのみ</button>
+    <button type="button" class="rail-btn" aria-pressed="false" data-rail="private" onclick="setRailFilter('private')">私鉄のみ</button>
   </div>
   <div class="op-picker" id="op-picker" hidden>
-    <div class="op-summary" id="op-summary" onclick="toggleOpList()"></div>
+    <button type="button" class="op-summary" id="op-summary" aria-controls="op-list-wrap" aria-expanded="false" onclick="toggleOpList()"></button>
     <div class="op-list-wrap" id="op-list-wrap" hidden>
       <input type="text" class="op-search" id="op-search" placeholder="事業者名で検索 (例: 東急)" oninput="renderOpList()">
       <div class="op-list" id="op-list"></div>
@@ -552,6 +640,7 @@ button:focus-visible, select:focus-visible, input:focus-visible {
       </div>
     </div>
   </div>
+    </div>
   <div class="opt-toggles" id="opt-toggles">
     <label><input type="checkbox" id="opt-express" checked onchange="saveOpts()"> 特急を使う</label>
     <label><input type="checkbox" id="opt-shinkansen" checked onchange="saveOpts()"> 新幹線を使う</label>
@@ -566,13 +655,15 @@ button:focus-visible, select:focus-visible, input:focus-visible {
              placeholder="上限なし" onchange="setBudget(this.value)"> 円以内
     </label>
   </div>
-  <button class="search-btn" id="search-btn" onclick="doSearch()" disabled>検索</button>
+  <p class="filter-note" id="bus-note" hidden>バスは都営バスに対応しています。バス運賃は合計に含みません。</p>
+  </details>
+  <button type="button" class="search-btn" id="search-btn" onclick="doSearch()" disabled>経路を検索</button>
 </div>
 
-<div class="results" id="results">
+<div class="results" id="results" aria-label="検索結果">
   <div class="empty-state">
     <div class="icon">&#128644;</div>
-    <p>駅名を入力して経路を検索</p>
+    <p>出発地と到着地を入力してください</p>
   </div>
 </div>
 
@@ -583,6 +674,66 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 <script src="platform_match.js?v=1"></script>
 <script src="router_v3.js?v=15"></script>
 <script>
+
+function escapeUI(value) {
+  return String(value).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+}
+function updateTimeUI() {
+  const nowMode = document.getElementById('time-type').value === 'now';
+  const dc = document.getElementById('date-control'), tc = document.getElementById('time-control');
+  if (dc) dc.hidden = nowMode;
+  if (tc) tc.hidden = nowMode;
+  const hint = document.getElementById('time-hint');
+  if (hint) hint.hidden = !nowMode;
+  if (nowMode) {
+    const now = new Date();
+    document.getElementById('date-input').value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    document.getElementById('time-input').value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  }
+}
+function updateFilterSummary() {
+  const el = document.getElementById('filter-summary');
+  if (!el) return;
+  const parts = [travelMode === 'rail' ? '鉄道のみ' : travelMode === 'bus' ? 'バスのみ（都営）' : '鉄道＋バス'];
+  if (travelMode === 'rail' && railFilter !== 'all') parts.push(railFilter === 'jr' ? 'JRのみ' : selectedOps.size ? Array.from(selectedOps).join('・') : '私鉄のみ');
+  if (travelMode !== 'bus') {
+    const express = document.getElementById('opt-express').checked, shinkansen = document.getElementById('opt-shinkansen').checked;
+    if (express && shinkansen) parts.push('特急・新幹線を含む');
+    if (!express) parts.push('特急なし');
+    if (!document.getElementById('opt-shinkansen').checked) parts.push('新幹線なし');
+    parts.push(currentSeat() === 'reserved' ? '指定席' : '自由席');
+    if (currentBudget() != null) parts.push('予算 ' + currentBudget().toLocaleString() + '円');
+  }
+  el.textContent = parts.join(' / ');
+  const note = document.getElementById('bus-note');
+  if (note) note.hidden = travelMode === 'rail';
+}
+function clearInputError(input) {
+  input.removeAttribute?.('aria-invalid');
+  input.removeAttribute?.('aria-describedby');
+  input.parentElement?.querySelector('.field-error')?.remove();
+}
+function showInputError(input, message) {
+  clearInputError(input);
+  input.setAttribute('aria-invalid', 'true');
+  const error = document.createElement('p');
+  error.className = 'field-error';
+  error.id = input.dataset.fieldId + '-error';
+  error.setAttribute('role', 'alert');
+  error.textContent = message;
+  input.setAttribute('aria-describedby', error.id);
+  input.parentElement.appendChild(error);
+  input.focus();
+}
+let resultContext = '';
+let searchDirty = false;
+function markSearchDirty() {
+  if (!document.getElementById('result-context')) return;
+  searchDirty = true;
+  const notice = document.getElementById('result-notice');
+  if (notice) notice.hidden = false;
+}
+
 // === Global State ===
 let graph = null;
 let freqData = null;
@@ -592,6 +743,7 @@ const selectedStations = {}; // fieldId -> stationIndex
 function useEnteredTime() {
   const type = document.getElementById('time-type');
   if (type.value === 'now') type.value = 'dep';
+  updateTimeUI();
 }
 
 // Set default time to now
@@ -604,6 +756,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // 日付は今日をデフォルト
   const di = document.getElementById('date-input');
   if (di) di.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  updateTimeUI();
+  updateFilterSummary();
+  const card = document.querySelector('.search-card');
+  card.addEventListener('input', markSearchDirty);
+
 });
 
 // 祝日(休日=ekitan dw=2扱い)を年から計算する。
@@ -1127,16 +1284,11 @@ function initAutocomplete() {
   document.querySelectorAll('.field-row').forEach(setupFieldAC);
 }
 
-// サジェストは position:absolute で浮くので、そのままだと真下の入力欄(出発欄を
-// 打っているときの到着欄など)や検索ボタンを完全に覆ってしまう。覆われた到着欄を
-// タップすると、実際に触れているのは候補(.ac-item)なので mousedown の
-// preventDefault がフォーカス移動ごと打ち消し、「到着欄をタップしたのに出発欄に
-// フォーカスが戻る(しかも出発駅が勝手に書き換わる)」ように見えていた。
-// 表示中は行の下に候補リストぶんの余白を確保して、他の操作対象を隠さないようにする。
+// 候補は入力欄の下に通常フローで表示し、ほかの入力欄やボタンを覆わない。
 const AC_GAP = 12;  // dropdown の margin-top(4px) + 行間(8px)
 function showDropdown(row, dropdown) {
   dropdown.classList.add('show');
-  if (row && row.style) row.style.marginBottom = (dropdown.offsetHeight + AC_GAP) + 'px';
+  if (row && row.style) row.style.marginBottom = '';
 }
 function hideDropdown(row, dropdown) {
   dropdown.classList.remove('show');
@@ -1155,39 +1307,46 @@ function setupFieldAC(row) {
   // 削除で行番号が変わっても、既存の欄と新しい欄の選択状態を混ぜない。
   if (!input.dataset.fieldId) input.dataset.fieldId = 'field-' + nextFieldId++;
 
+  function choose(id) {
+    input.value = graph.stations[id].n;
+    selectedStations[input.dataset.fieldId] = id;
+    clearInputError(input);
+    hideDropdown(row, dropdown);
+    input.focus();
+    markSearchDirty();
+  }
   input.addEventListener('input', () => {
     delete selectedStations[input.dataset.fieldId];
-    const results = searchStations(input.value);
-    if (results.length === 0 || !input.value) {
-      hideDropdown(row, dropdown);
-      return;
-    }
-    dropdown.innerHTML = results.map(s => `
-      <div class="ac-item" data-id="${s.id}">
-        <div>
-          <div class="ac-name">${s.mode === 1 ? '&#128652; ' : ''}${s.name}</div>
-          <div class="ac-sub">${s.mode === 1 ? 'バス停 / ' : ''}${s.pref ? s.pref + ' / ' : ''}${s.lines.join('・')}</div>
-        </div>
-      </div>
-    `).join('');
+    clearInputError(input);
+    const results = searchStations(input.value.trim());
+    if (!input.value.trim()) { hideDropdown(row, dropdown); return; }
+    dropdown.innerHTML = results.length ? results.map(s => `
+      <button type="button" class="ac-item" data-id="${s.id}">
+        <span>
+          <span class="ac-name" style="display:block">${s.mode === 1 ? 'バス停 ' : ''}${escapeUI(s.name)}</span>
+          <span class="ac-sub" style="display:block;overflow-wrap:anywhere">${escapeUI([s.pref, ...s.lines].filter(Boolean).join(' / '))}</span>
+        </span>
+      </button>
+    `).join('') : '<div class="ac-item">候補がありません。駅名・バス停名を確認してください。</div>';
     showDropdown(row, dropdown);
-
-    dropdown.querySelectorAll('.ac-item').forEach(el => {
-      el.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        const id = parseInt(el.dataset.id);
-        input.value = graph.stations[id].n;
-        selectedStations[input.dataset.fieldId] = id;
-        hideDropdown(row, dropdown);
+    dropdown.querySelectorAll('button.ac-item').forEach(el => {
+      el.addEventListener('mousedown', e => e.preventDefault());
+      el.addEventListener('click', () => choose(Number(el.dataset.id)));
+      el.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { hideDropdown(row, dropdown); input.focus(); }
+        if (e.key === 'ArrowDown' && el.nextElementSibling) { e.preventDefault(); el.nextElementSibling.focus(); }
+        if (e.key === 'ArrowUp') { e.preventDefault(); (el.previousElementSibling || input).focus(); }
       });
     });
   });
-
-  // 他の欄にフォーカスが移ったら、その欄の候補と入れ替わりで閉じる。
-  // 閉じるのを遅らせているのは、候補タップ(mousedown → blur → click)の途中で
-  // リストを消してしまわないため。
-  input.addEventListener('blur', () => {
-    setTimeout(() => hideDropdown(row, dropdown), 150);
+  input.addEventListener('keydown', e => {
+    if (e.isComposing) return;
+    if (e.key === 'ArrowDown') { const first = dropdown.querySelector('button'); if (first) { e.preventDefault(); first.focus(); } }
+    if (e.key === 'Escape') hideDropdown(row, dropdown);
+    if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+  });
+  row.addEventListener?.('focusout', () => {
+    setTimeout(() => { if (!row.contains(document.activeElement)) hideDropdown(row, dropdown); }, 0);
   });
 }
 
@@ -1196,12 +1355,14 @@ let viaCount = 0;
 function addVia() {
   if (viaCount >= 3) return;
   viaCount++;
+  const add = document.querySelector('.add-via-btn');
+  if (add) add.disabled = viaCount >= 3;
   const arrRow = document.querySelector('[data-role="arr"]');
   const via = document.createElement('div');
   via.className = 'field-row';
   via.dataset.role = 'via';
   via.innerHTML = `
-    <span class="field-label via">経</span>
+    <span class="field-label via">経由</span>
     <div class="field-input">
       <input type="text" placeholder="経由駅" autocomplete="off">
       <button class="field-clear" onclick="clearField(this)">&times;</button>
@@ -1222,11 +1383,18 @@ function removeVia(btn) {
   }
   row.remove();
   viaCount--;
+  const add = document.querySelector('.add-via-btn');
+  if (add) { add.disabled = false; add.focus(); }
+  markSearchDirty();
 }
 
 function clearField(btn) {
   const input = btn.previousElementSibling;
   input.value = '';
+  clearInputError(input);
+  const row = input.closest('.field-row');
+  hideDropdown(row, row.querySelector('.ac-dropdown'));
+  markSearchDirty();
   if (input.dataset.fieldId) delete selectedStations[input.dataset.fieldId];
   input.focus();
 }
@@ -1243,6 +1411,8 @@ function swapDepArr() {
   selectedStations[depInput.dataset.fieldId] = selectedStations[arrInput.dataset.fieldId];
   arrInput.value = tmpVal;
   selectedStations[arrInput.dataset.fieldId] = tmpId;
+  clearInputError(depInput); clearInputError(arrInput);
+  markSearchDirty();
 }
 
 // Find all station IDs matching a name exactly
@@ -1297,6 +1467,7 @@ function setTravelMode(mode) {
   travelMode = mode;
   const btns = document.querySelectorAll('.mode-btn');
   for (const b of btns) {
+    b.setAttribute?.('aria-pressed', String(b.dataset.mode === mode));
     if (b.dataset.mode === mode) b.classList.add('on');
     else b.classList.remove('on');
   }
@@ -1306,6 +1477,7 @@ function setTravelMode(mode) {
     if (mode === 'bus') ot.classList.add('dim');
     else ot.classList.remove('dim');
   }
+  for (const input of document.querySelectorAll('#opt-toggles input, #opt-toggles select')) input.disabled = mode === 'bus';
   updateRailUI();
   saveOpts();
 }
@@ -1320,6 +1492,7 @@ function setRailFilter(f) {
   if (RAIL_FILTERS.indexOf(f) < 0) f = 'all';
   railFilter = f;
   for (const b of document.querySelectorAll('.rail-btn')) {
+    b.setAttribute?.('aria-pressed', String(b.dataset.rail === f));
     if (b.dataset.rail === f) b.classList.add('on');
     else b.classList.remove('on');
   }
@@ -1360,6 +1533,7 @@ function toggleOpList() {
   const w = document.getElementById('op-list-wrap');
   if (!w) return;
   w.hidden = !w.hidden;
+  document.getElementById('op-summary')?.setAttribute?.('aria-expanded', String(!w.hidden));
   if (!w.hidden) renderOpList();
 }
 function renderOpList() {
@@ -1421,6 +1595,8 @@ function setBudget(v) {
   if (allFoundRoutes.length) doSearch();   // 予算は探索条件なので再検索が要る
 }
 function saveOpts() {
+  updateFilterSummary();
+  markSearchDirty();
   localStorage.setItem('routeOpts', JSON.stringify({
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
@@ -1469,6 +1645,7 @@ function applyUrlParams() {
   const d = (p.get('d') || '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
     const di = document.getElementById('date-input'); if (di) di.value = d;
+    if (document.getElementById('time-type').value === 'now') document.getElementById('time-type').value = 'dep';
   }
   // ?budget=3000 で予算(運賃上限)付きの案内に直行できる
   const budget = (p.get('budget') || '').trim();
@@ -1487,10 +1664,14 @@ function applyUrlParams() {
     if (ops.length) selectedOps = new Set(ops);
     setRailFilter(rail);
   }
+  updateTimeUI();
+  updateFilterSummary();
   if (from && to) setTimeout(doSearch, 0);
 }
 
 function doSearch() {
+  if (!graph) return;
+  for (const input of document.querySelectorAll('.field-row input')) clearInputError(input);
   const rows = document.querySelectorAll('.field-row');
   const waypointCandidates = [];
 
@@ -1503,7 +1684,7 @@ function doSearch() {
       const text = input.value.trim();
       if (!text) {
         if (row.dataset.role !== 'via') {
-          alert(row.dataset.role === 'dep' ? '出発駅を選択してください' : '到着駅を選択してください');
+          showInputError(input, row.dataset.role === 'dep' ? '出発地を入力してください' : '到着地を入力してください');
           return;
         }
         continue;
@@ -1514,11 +1695,11 @@ function doSearch() {
       } else {
         const matches = searchStations(text);
         if (matches.length > 0) {
-          const name = matches[0].name;
-          waypointCandidates.push(findAllByName(name));
-          input.value = name;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          showInputError(input, '候補から駅・バス停を選んでください');
+          return;
         } else {
-          alert(`「${text}」が見つかりません`);
+          showInputError(input, `「${text}」が見つかりません。名前を確認してください`);
           return;
         }
       }
@@ -1530,11 +1711,19 @@ function doSearch() {
   }
 
   if (waypointCandidates.length < 2) {
-    alert('出発駅と到着駅を入力してください');
+    showInputError(rows[0].querySelector('input'), '出発地と到着地を入力してください');
     return;
   }
 
+  for (const row of rows) {
+    const dropdown = row.querySelector('.ac-dropdown');
+    if (dropdown?.classList) hideDropdown(row, dropdown);
+  }
+  updateTimeUI();
   const st = getSearchTime();
+  resultContext = Array.from(rows).map(row => row.querySelector('input').value.trim()).filter(Boolean).join(' → ') +
+    ' · ' + document.getElementById('date-input').value + ' ' + formatTime(st.minutes) + (st.type === 'arr' ? 'までに到着' : '以降に出発');
+  searchDirty = false;
   const opts = {
     express: document.getElementById('opt-express').checked,
     shinkansen: document.getElementById('opt-shinkansen').checked,
@@ -1836,13 +2025,13 @@ function renderOneRoute(j, index) {
   const routeId = 'route-' + index;
   let html = `<div class="route-card" id="card-${index}">`;
 
-  html += `<div class="route-summary" onclick="toggleRoute('${routeId}')" style="cursor:pointer">
+  html += `<div class="route-summary">
     <div style="flex:1">
-      <div style="font-size:20px;font-weight:700;color:var(--blue)">${depStr} → ${arrStr}</div>
-      <div style="font-size:13px;color:var(--muted);margin-top:2px">${totalMin}分 / ${j.transfers > 0 ? j.transfers + '回乗換' : '直通'} / ${km.toFixed(1)}km${nBusRides ? ` / <span style="color:${BUS_COLOR};font-weight:600">&#128652; バス${nBusRides}回</span>` : ''}</div>
+      <div class="route-overview">${depStr} → ${arrStr}</div>
+      <div class="route-meta">${totalMin}分 / ${j.transfers > 0 ? j.transfers + '回乗換' : '乗換なし'}${nBusRides ? ` / <span style="color:${BUS_COLOR};font-weight:600">&#128652; バス${nBusRides}回</span>` : ''}</div>
     </div>
     <div style="text-align:right">
-      <div style="font-size:18px;font-weight:700;color:var(--text)">${
+      <div style="font-size:1.125rem;font-weight:700;color:var(--text)">${
         // 全区間バスだと鉄道運賃の合計が0円になる。「¥0」は誤解を招くので出さない
         fare.total > 0 || !nBusRides
           ? `¥${fare.total.toLocaleString()}`
@@ -1870,12 +2059,6 @@ function renderOneRoute(j, index) {
     </div>
   </div>`;
 
-  // 前の便 / 次の便 (この経路の発車時刻を1本ずらす)
-  html += `<div style="display:flex;gap:8px;padding:2px 16px 8px">
-    <button onclick="event.stopPropagation();shiftTrain(${index},-1)" style="flex:1;padding:7px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--blue);cursor:pointer">← 前の便</button>
-    <button onclick="event.stopPropagation();shiftTrain(${index},1)" style="flex:1;padding:7px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--blue);cursor:pointer">次の便 →</button>
-  </div>`;
-
   // Line summary bar
   const totalStops = rides.reduce((s, l) => s + l.stops.length - 1, 0) || 1;
   html += `<div style="display:flex;height:4px;margin:0 16px 8px;border-radius:2px;overflow:hidden">`;
@@ -1888,11 +2071,16 @@ function renderOneRoute(j, index) {
   const lineNames = rides.map(l =>
     `<span class="line-tag" style="background:${legColor(l)}11;color:${legColor(l)};margin:2px">${isBusLeg(l) ? '&#128652; ' : ''}${dl(l)}</span>`
   ).join('→');
-  html += `<div style="padding:0 16px 10px;font-size:12px;line-height:1.8">${lineNames}</div>`;
+  html += `<div class="route-lines">${lineNames}</div>`;
 
+  html += `<button type="button" class="route-open" id="toggle-${routeId}" aria-controls="${routeId}" aria-expanded="${index === 0}" onclick="toggleRoute('${routeId}')">${index === 0 ? '経路詳細を閉じる' : '経路詳細を開く'}</button>`;
   const collapsed = index > 0 ? ' collapsed' : '';
   html += `<div class="route-detail${collapsed}" id="${routeId}">`;
 
+  html += `<div class="train-shift">
+    <button type="button" onclick="shiftTrain(${index},-1)">前の便</button>
+    <button type="button" onclick="shiftTrain(${index},1)">次の便</button>
+  </div>`;
   let prevArr = null;
   let pendingArrPlat = null;   // 直前のride legの降車ホーム(次の駅名表示に添える)
   for (let li = 0; li < j.legs.length; li++) {
@@ -1931,7 +2119,7 @@ function renderOneRoute(j, index) {
       midHtml += `</div>`;
     }
     const stopsLabel = nMid > 0
-      ? `<span onclick="event.stopPropagation();toggleStops('${stopsId}',this)" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted">途中${nMid}${unit} ▾</span>`
+      ? `<button type="button" aria-controls="${stopsId}" aria-expanded="false" onclick="toggleStops('${stopsId}',this)" style="min-height:44px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:white;color:var(--blue);cursor:pointer;font-size:.875rem">途中${nMid}${unit} ▾</button>`
       : `${leg.stops.length - 1}${unit}`;
     html += `<div class="step">
       <div class="step-line">
@@ -1993,6 +2181,7 @@ function toast(msg) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'toast';
+    el.setAttribute('role', 'status');
     el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;z-index:9999;opacity:0;transition:opacity .2s;pointer-events:none';
     document.body.appendChild(el);
   }
@@ -2041,7 +2230,7 @@ function shiftTrain(index, dir) {
   const card = document.getElementById('card-' + index);
   if (card) card.outerHTML = renderOneRoute(nj, index);
   const det = document.getElementById('route-' + index);
-  if (det) det.classList.remove('collapsed');   // 差し替え後は展開表示
+  if (det) { det.classList.remove('collapsed'); const button = document.getElementById('toggle-route-' + index); if (button) { button.setAttribute('aria-expanded', 'true'); button.textContent = '経路詳細を閉じる'; } }   // 差し替え後は展開表示
 }
 
 let currentSort = 'fast';   // fast=早い / cheap=安い / transfer=乗換少
@@ -2069,7 +2258,7 @@ const SORTERS = {
   cheap: (a, b) => (fareOf(a) - fareOf(b)) || (timeProximity(a) - timeProximity(b)) || (a.arr - b.arr) || (a.transfers - b.transfers),
   transfer: (a, b) => (a.transfers - b.transfers) || (timeProximity(a) - timeProximity(b)) || (a.arr - b.arr) || (fareOf(a) - fareOf(b)),
 };
-const SORT_LABELS = { fast: '早い順', cheap: '安い順', transfer: '乗換少' };
+const SORT_LABELS = { fast: '早い順', cheap: '安い順', transfer: '乗換が少ない順' };
 
 function setSort(key) {
   if (currentSort === key) return;
@@ -2078,11 +2267,11 @@ function setSort(key) {
 }
 
 function sortBarHtml() {
-  return `<div style="display:flex;gap:6px;padding:8px 12px 4px">` +
+  return `<div class="sort-bar" role="group" aria-label="経路の並び順">` +
     Object.keys(SORT_LABELS).map(k => {
       const on = currentSort === k;
-      return `<button onclick="setSort('${k}')" style="
-        flex:1;padding:8px;border-radius:8px;font-size:13px;cursor:pointer;
+      return `<button type="button" aria-pressed="${on}" onclick="setSort('${k}')" style="
+        flex:1;padding:8px;border-radius:8px;font-size:.875rem;cursor:pointer;
         border:1px solid ${on ? 'var(--blue)' : 'var(--border)'};
         background:${on ? 'var(--blue)' : '#fff'};color:${on ? '#fff' : 'var(--text)'};
         font-weight:${on ? '600' : '400'}">${SORT_LABELS[k]}</button>`;
@@ -2097,7 +2286,8 @@ function renderRoutes() {
   const allOverBudget = routes.every(j => j.budget && j.budget.over);
   routes.sort(allOverBudget ? SORTERS.cheap : (SORTERS[currentSort] || SORTERS.fast));
   const showCount = showAllRoutes ? routes.length : Math.min(3, routes.length);
-  let html = `<div id="first-last-bar">${firstLastBlockHtml()}</div>`;
+  let html = `<h2 class="result-heading">検索結果</h2><p class="result-context" id="result-context">${escapeUI(resultContext)}</p>
+    <p class="result-notice" id="result-notice" role="status" ${searchDirty ? '' : 'hidden'}>条件を変更しました。「経路を検索」で結果を更新してください。</p>`;
   html += budgetBannerHtml(routes);
   html += routes.length > 1 ? sortBarHtml() : '';
   if (routes.length > 1) {
@@ -2111,6 +2301,7 @@ function renderRoutes() {
       font-size:14px;color:var(--blue);cursor:pointer;font-weight:500;
     ">さらに${routes.length - showCount}件表示</button>`;
   }
+  html += `<div id="first-last-bar">${firstLastBlockHtml()}</div>`;
   document.getElementById('results').innerHTML = html;
 }
 
@@ -2142,7 +2333,9 @@ function showMoreRoutes() {
 function toggleRoute(routeId) {
   const el = document.getElementById(routeId);
   if (!el) return;
-  el.classList.toggle('collapsed');
+  const open = !el.classList.toggle('collapsed');
+  const button = document.getElementById('toggle-' + routeId);
+  if (button) { button.setAttribute('aria-expanded', String(open)); button.textContent = open ? '経路詳細を閉じる' : '経路詳細を開く'; }
 }
 
 // 途中駅リストの開閉(▾/▴)
@@ -2150,7 +2343,7 @@ function toggleStops(stopsId, labelEl) {
   const el = document.getElementById(stopsId);
   if (!el) return;
   const open = el.classList.toggle('collapsed') === false;
-  if (labelEl) labelEl.innerHTML = labelEl.innerHTML.replace(open ? '▾' : '▴', open ? '▴' : '▾');
+  if (labelEl) { labelEl.setAttribute('aria-expanded', String(open)); labelEl.innerHTML = labelEl.innerHTML.replace(open ? '▾' : '▴', open ? '▴' : '▾'); }
 }
 
 function toggleDetail() {
