@@ -13,5 +13,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test tests/via-arrival.test.cjs
+      - run: gzip -dk trains_v3.bin.gz
+      - run: node --test tests/*.cjs
+      - run: node test_ui_render.js
+      - run: node test_sw_cache.js
 
