@@ -510,6 +510,7 @@ summary:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline:
 .time-selector { padding: 12px 16px; gap: 8px; }
 .time-selector > label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 125px; font-size: .875rem; min-width: 0; }
 .time-selector select, .time-selector input { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: white; }
+.time-selector input[type="date"], .time-selector input[type="time"] { flex: none; height: 48px; }
 .time-hint { font-size: .875rem; color: var(--muted); flex: 1 1 100%; }
 .advanced { border-top: 1px solid var(--border); }
 .advanced > summary { padding: 12px 16px; cursor: pointer; font-size: .875rem; min-height: 48px; }
@@ -2112,7 +2113,7 @@ function renderOneRoute(j, index) {
       midHtml += `</div>`;
     }
     const stopsLabel = nMid > 0
-      ? `<span onclick="event.stopPropagation();toggleStops('${stopsId}',this)" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted">途中${nMid}${unit} ▾</span>`
+      ? `<button type="button" aria-controls="${stopsId}" aria-expanded="false" onclick="toggleStops('${stopsId}',this)" style="min-height:44px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:white;color:var(--blue);cursor:pointer;font-size:.875rem">途中${nMid}${unit} ▾</button>`
       : `${leg.stops.length - 1}${unit}`;
     html += `<div class="step">
       <div class="step-line">
@@ -2336,7 +2337,7 @@ function toggleStops(stopsId, labelEl) {
   const el = document.getElementById(stopsId);
   if (!el) return;
   const open = el.classList.toggle('collapsed') === false;
-  if (labelEl) labelEl.innerHTML = labelEl.innerHTML.replace(open ? '▾' : '▴', open ? '▴' : '▾');
+  if (labelEl) { labelEl.setAttribute('aria-expanded', String(open)); labelEl.innerHTML = labelEl.innerHTML.replace(open ? '▾' : '▴', open ? '▴' : '▾'); }
 }
 
 function toggleDetail() {
