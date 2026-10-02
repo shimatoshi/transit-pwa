@@ -313,7 +313,9 @@ function query(srcIdx, dstIdx, depMin, opts) {
   const useShink = opts.shinkansen !== false;
   const banTrips = opts.banTrips || null; // Set of trip ids
   const banLines = opts.banLines || null; // Set of line names (経路多様化用)
-  // 運転日フィルタ: opts.day = 0平日/1土曜/2休日。該当日に走る列車のみ。
+  // UIは出発日からの日種別を渡す。従来の opts.day のみの呼び出しも維持する。
+  const dayMasks = D.tripCal && Array.isArray(opts.days)
+    ? opts.days.map(day => day == null ? 0 : (1 << day)) : null;
   const dayMask = (opts.day != null && D.tripCal) ? (1 << opts.day) : 0;
   const mode = D.tripMode;
   // busOnly はバス限定(鉄道を全部落とす)。noBus と同時指定は「バスも鉄道も無し」に
@@ -344,6 +346,7 @@ function query(srcIdx, dstIdx, depMin, opts) {
   const inFoot = new Int32Array(ns).fill(-1);   // 徒歩で来た場合の元駅
   const inOff = new Int32Array(ns);             // 到着connの日オフセット(分, k*1440)
   const tripBoard = new Int32Array(D.tripLine.length).fill(-1);
+  const tripBoardShift = new Int32Array(D.tripLine.length).fill(-1);
 
   arr[srcIdx] = depMin;
   if (D.foot[srcIdx]) {
@@ -360,9 +363,8 @@ function query(srcIdx, dstIdx, depMin, opts) {
   // 「k日後の同ダイヤ」として走査する(上限は MAX_EXTRA_DAYS 参照)。
   // 物理的な1本の列車(日跨ぎ運行含む)は時刻正規化により必ず1パス内に収まるので、
   // パス境界で tripBoard をリセットしても乗車継続を壊さない(翌日の同tripは別の運行)。
-  // 注意: 曜日は日ごとに進むが日付情報を持たないため、dayMask(運転日フィルタ)は
-  // 全パスに同じマスクを適用する近似(金曜→土曜ダイヤの切り替わり等は吸収しない)。
-  // これは既存の深夜帯+1440複製が持っていた近似と同じ。
+  // 深夜帯の+1440複製も翌日の運行。日跨ぎ列車の途中駅は、正規化済み停車時刻との差
+  // から「その列車が始発駅を出た日」を求め、途中で日付が変わっても同じ運転日を使う。
   for (let day = 0; day <= MAX_EXTRA_DAYS; day++) {
     const off = day * 1440;
     if (off > arr[dstIdx]) break;   // 既に前日までに到達済みなら以降の日は不要
@@ -376,14 +378,16 @@ function query(srcIdx, dstIdx, depMin, opts) {
       const trip = D.cTrip[c];
       if (banTrips && banTrips.has(trip)) continue;
       if (banLines && banLines.has(D.lines[D.tripLine[trip]])) continue;
-      if (dayMask && !(D.tripCal[trip] & dayMask)) continue;   // 該当運転日でない列車を除外
+      const serviceShift = off + D.cDepT[c] - D.stD[D.cStopI[c]];
+      const mask = dayMasks ? (dayMasks[serviceShift / 1440] ?? dayMask) : dayMask;
+      if (mask && !(D.tripCal[trip] & mask)) continue;
       if (noBus && mode[trip] === 1) continue;
       if (lineAllow && !lineAllow[D.tripLine[trip]]) continue;   // 事業者フィルタ
       if (!useShink && D.tripShink[trip]) continue;
       if (!useExpress && D.tripPaid[trip]) continue;
 
       const dS = D.cDepS[c];
-      let board = tripBoard[trip] !== -1;
+      let board = tripBoard[trip] !== -1 && tripBoardShift[trip] === serviceShift;
       if (!board && arr[dS] < INF) {
         // 同一駅乗換バッファ。出発駅(=直接歩いて来た/検索起点)はバッファ0。
         // バスが絡む乗換(乗る側・降りた側のどちらか)は厚めのバッファを使う
@@ -395,7 +399,10 @@ function query(srcIdx, dstIdx, depMin, opts) {
         if (arr[dS] + buf <= dT) board = true;
       }
       if (!board) continue;
-      if (tripBoard[trip] === -1) tripBoard[trip] = c;
+      if (tripBoard[trip] === -1 || tripBoardShift[trip] !== serviceShift) {
+        tripBoard[trip] = c;
+        tripBoardShift[trip] = serviceShift;
+      }
 
       const aS = D.cArrS[c], aT = D.cArrT[c] + off;
       if (aT < arr[aS]) {

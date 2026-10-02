@@ -581,7 +581,7 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 <div class="credits" id="credits"></div>
 
 <script src="platform_match.js?v=1"></script>
-<script src="router_v3.js?v=14"></script>
+<script src="router_v3.js?v=15"></script>
 <script>
 // === Global State ===
 let graph = null;
@@ -657,10 +657,11 @@ function jpHolidays(year) {
 }
 
 // 検索日の運転日種別: 0=平日 1=土曜 2=休日(日祝)
-function getDayType() {
+function getDayType(offset = 0) {
   const di = document.getElementById('date-input');
   const v = di && di.value;
   const d = v ? new Date(v + 'T00:00:00') : new Date();
+  d.setDate(d.getDate() + offset);
   const dow = d.getDay();             // 0=日,6=土
   const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   if (dow === 0 || jpHolidays(d.getFullYear()).has(key)) return 2;
@@ -678,12 +679,12 @@ function getDayType() {
 // この4本は vercel.json で immutable にしてある。中身を差し替えたら ?v= を必ず上げること。
 // 上げ忘れると、ブラウザのHTTPキャッシュが1年間古い方を返し続ける。
 const DATA_URLS = {
-  graph: 'graph_v2.json?v=7',
+  graph: 'graph_v2.json?v=8',
   meta:  'trains_v3_meta.json?v=5',
   fares: 'fares.json?v=11',
   bin:   'trains_v3.bin.gz?v=5',
 };
-const WORKER_URL = 'data_worker.js?v=3';
+const WORKER_URL = 'data_worker.js?v=4';
 // のりば(ホーム番線)データ。無くても検索は動くので遅延ロード(失敗しても無視)
 const PLATFORMS_URL = 'platforms.json?v=1';
 let platformData = null;
@@ -1142,6 +1143,7 @@ function hideDropdown(row, dropdown) {
   if (row && row.style) row.style.marginBottom = '';
 }
 
+let nextFieldId = 0;
 function setupFieldAC(row) {
   const input = row.querySelector('input');
   const dropdown = row.querySelector('.ac-dropdown');
@@ -1150,10 +1152,8 @@ function setupFieldAC(row) {
   input.setAttribute('aria-label', label);
   row.querySelector('.field-clear').setAttribute('aria-label', label + 'を消去');
 
-  const fieldId = input.closest('.field-row').dataset.role + '-' +
-    Array.from(document.querySelectorAll('.field-row')).indexOf(input.closest('.field-row'));
-
-  input.dataset.fieldId = fieldId;
+  // 削除で行番号が変わっても、既存の欄と新しい欄の選択状態を混ぜない。
+  if (!input.dataset.fieldId) input.dataset.fieldId = 'field-' + nextFieldId++;
 
   input.addEventListener('input', () => {
     delete selectedStations[input.dataset.fieldId];
@@ -1547,6 +1547,7 @@ function doSearch() {
     operators: travelMode === 'rail' && railFilter === 'private' && selectedOps.size
       ? Array.from(selectedOps) : undefined,
     day: getDayType(),               // 運転日フィルタ(0平日/1土/2休)
+    days: Array.from({ length: 4 }, (_, i) => getDayType(i)),
   };
   lastSearchOpts = opts;             // 前の便/次の便で再利用
   // 到着/出発の時刻指定を覚えておき、どのソートモードでも第2キーとして
@@ -1557,8 +1558,10 @@ function doSearch() {
 
   // 到着指定: 指定時刻までに着く最遅出発を二分探索
   function latestDeparture(f, t, arrBy) {
-    let lo = arrBy - 480, hi = arrBy, best = null;
+    let lo = Math.max(0, arrBy - 480), hi = arrBy;
     const ok = j => j && j.arr <= arrBy;
+    let best = RouterV3.query(f, t, lo, opts);
+    if (!ok(best)) return null;
     while (hi - lo > 1) {
       const mid = (lo + hi) >> 1;
       const j = RouterV3.query(f, t, mid, opts);
@@ -1659,6 +1662,8 @@ function doSearch() {
         arriveBy = best.dep - 4;
       }
       const combined = { ...segments[0], legs: [...segments[0].legs] };
+      combined.waypoints = [segments[0].legs[0].from,
+        ...segments.map(s => s.legs[s.legs.length - 1].to)];
       for (const segment of segments.slice(1)) {
         combined.legs.push(...segment.legs);
         combined.arr = segment.arr;
@@ -1669,35 +1674,46 @@ function doSearch() {
       return;
     }
     // 出発指定の経由駅: 区間ごとに最早到着を連結
-    let combined = null;
-    let depMin = st.minutes;
-    for (let i = 0; i < waypointCandidates.length - 1; i++) {
-      let best = null;
-      for (const fid of waypointCandidates[i]) {
-        for (const tid of waypointCandidates[i + 1]) {
-          if (fid === tid) continue;
-          const j = RouterV3.query(fid, tid, depMin, opts);
-          if (j && (!best || j.arr < best.arr)) best = j;
-        }
-      }
-      if (!best) {
-        document.getElementById('results').innerHTML =
-          `<div class="no-route">経路が見つかりません</div>`;
-        return;
-      }
-      if (!combined) combined = best;
-      else {
-        combined.legs.push(...best.legs);
-        combined.arr = best.arr;
-        combined.transfers += best.transfers + 1;
-      }
-      depMin = best.arr + 4;
+    const combined = queryViaRoute(waypointCandidates, st.minutes, opts);
+    if (!combined) {
+      document.getElementById('results').innerHTML =
+        '<div class="no-route">経路が見つかりません</div>';
+      return;
     }
     // 経由指定は区間ごとに最早到着を連結するだけで候補を並べないため、予算での
     // 絞り込みはできない。総額だけ判定して超過なら警告表示にする。
     RouterV3.annotateBudget(combined, opts);
     renderMultipleResults([combined], false);  // 経由指定は始発・終電の対象外
   }
+}
+
+// 経由区間を繋ぐ際は、前区間の到着駅IDを次区間の出発駅IDに固定する。
+// 保存した waypoints は「前の便 / 次の便」でも同じ経由条件を維持するために使う。
+function queryViaRoute(candidates, depMin, opts) {
+  let combined = null, requiredFrom = null;
+  for (let i = 0; i < candidates.length - 1; i++) {
+    let best = null;
+    for (const from of requiredFrom === null ? candidates[i] : [requiredFrom]) {
+      for (const to of candidates[i + 1]) {
+        if (from === to) continue;
+        const j = RouterV3.query(from, to, depMin, opts);
+        if (j && (!best || j.arr < best.arr)) best = j;
+      }
+    }
+    if (!best) return null;
+    const end = best.legs[best.legs.length - 1].to;
+    if (!combined) {
+      combined = { ...best, legs: [...best.legs], waypoints: [best.legs[0].from, end] };
+    } else {
+      combined.legs.push(...best.legs);
+      combined.waypoints.push(end);
+      combined.arr = best.arr;
+      combined.transfers += best.transfers + 1;
+    }
+    requiredFrom = end;
+    depMin = best.arr + 4;
+  }
+  return combined;
 }
 
 function formatTime(minutes) {
@@ -1992,9 +2008,31 @@ function shiftTrain(index, dir) {
   if (!j || !j.legs || !j.legs.length) return;
   const src = j.legs[0].from;
   const dst = j.legs[j.legs.length - 1].to;
-  const nj = dir > 0
-    ? RouterV3.nextJourney(src, dst, j.dep, lastSearchOpts)
-    : RouterV3.prevJourney(src, dst, j.dep, lastSearchOpts);
+  let nj;
+  if (j.waypoints && j.waypoints.length > 2) {
+    const query = start => queryViaRoute(j.waypoints.map(id => [id]), start, lastSearchOpts);
+    if (dir > 0) nj = query(j.dep + 1);
+    else {
+      let lo = Math.max(0, j.dep - 180), hi = j.dep;
+      nj = query(lo);
+      if (nj && nj.dep < j.dep) {
+        while (hi - lo > 1) {
+          const mid = (lo + hi) >> 1, candidate = query(mid);
+          if (candidate && candidate.dep < j.dep) { lo = mid; nj = candidate; }
+          else hi = mid;
+        }
+      } else nj = null;
+    }
+    if (nj) RouterV3.annotateBudget(nj, lastSearchOpts);
+  } else {
+    nj = dir > 0
+      ? RouterV3.nextJourney(src, dst, j.dep, lastSearchOpts)
+      : RouterV3.prevJourney(src, dst, j.dep, lastSearchOpts);
+  }
+  if (nj && searchTimeCtx && searchTimeCtx.type === 'arr' && nj.arr > searchTimeCtx.minutes) {
+    toast('指定した到着時刻までに着く次の便は見つかりません');
+    return;
+  }
   if (!nj) {
     toast(dir > 0 ? 'これより後の便は見つかりません' : 'これより前の便は見つかりません');
     return;
