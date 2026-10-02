@@ -505,12 +505,14 @@ summary:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline:
 .ac-item:hover, .ac-item:focus { background: #eff6ff; }
 .ac-item .ac-name { font-size: 1rem; }
 .ac-item .ac-sub { font-size: .875rem; line-height: 1.5; }
-.controls { padding: 0 16px 12px; border: 0; }
+.controls { padding: 0 16px 12px; border: 0; flex-wrap: wrap; }
+.controls button { flex: 1 1 145px; }
 .add-via-btn, .swap-btn { font-size: .875rem; border-style: solid; padding: 8px 12px; }
 .time-selector { padding: 12px 16px; gap: 8px; }
 .time-selector > label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 125px; font-size: .875rem; min-width: 0; }
 .time-selector select, .time-selector input { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: white; }
-.time-selector input[type="date"], .time-selector input[type="time"] { flex: none; height: 48px; }
+.time-selector input[type="date"], .time-selector input[type="time"] { flex: none; height: auto; min-height: 48px; }
+.time-selector select, .time-selector input { font-size: 1rem; }
 .time-hint { font-size: .875rem; color: var(--muted); flex: 1 1 100%; }
 .advanced { border-top: 1px solid var(--border); }
 .advanced > summary { padding: 12px 16px; cursor: pointer; font-size: .875rem; min-height: 48px; }
@@ -529,7 +531,7 @@ summary:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline:
 .opt-toggles input[type="number"] { width: 108px; font-size: 1rem; text-align: left; }
 .opt-toggles select { font-size: 1rem; }
 .filter-note { color: var(--muted); font-size: .875rem; padding: 0 16px 12px; }
-.search-btn { width: calc(100% - 32px); margin: 4px 16px 16px; border-radius: 10px; min-height: 48px; }
+.search-btn { font-size: 1rem; width: calc(100% - 32px); margin: 4px 16px 16px; border-radius: 10px; min-height: 48px; }
 .result-heading { font-size: 1.125rem; padding: 12px 4px 4px; }
 .result-context { font-size: .875rem; color: var(--muted); padding: 0 4px 8px; overflow-wrap: anywhere; }
 .result-notice { padding: 12px; margin-bottom: 12px; background: #fffbeb; color: #854d0e; border: 1px solid #fcd34d; border-radius: 8px; font-size: .875rem; }
@@ -1322,7 +1324,7 @@ function setupFieldAC(row) {
       <button type="button" class="ac-item" data-id="${s.id}">
         <span>
           <span class="ac-name" style="display:block">${s.mode === 1 ? 'バス停 ' : ''}${escapeUI(s.name)}</span>
-          <span class="ac-sub" style="display:block">${escapeUI([s.pref, ...s.lines].filter(Boolean).join(' / '))}</span>
+          <span class="ac-sub" style="display:block;overflow-wrap:anywhere">${escapeUI([s.pref, ...s.lines].filter(Boolean).join(' / '))}</span>
         </span>
       </button>
     `).join('') : '<div class="ac-item">候補がありません。駅名・バス停名を確認してください。</div>';
@@ -2025,7 +2027,7 @@ function renderOneRoute(j, index) {
       <div class="route-meta">${totalMin}分 / ${j.transfers > 0 ? j.transfers + '回乗換' : '乗換なし'}${nBusRides ? ` / <span style="color:${BUS_COLOR};font-weight:600">&#128652; バス${nBusRides}回</span>` : ''}</div>
     </div>
     <div style="text-align:right">
-      <div style="font-size:18px;font-weight:700;color:var(--text)">${
+      <div style="font-size:1.125rem;font-weight:700;color:var(--text)">${
         // 全区間バスだと鉄道運賃の合計が0円になる。「¥0」は誤解を招くので出さない
         fare.total > 0 || !nBusRides
           ? `¥${fare.total.toLocaleString()}`
