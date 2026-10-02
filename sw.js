@@ -58,7 +58,7 @@
 // v56 = 複数日ロールオーバー探索(宿泊を挟む超長距離、data_worker.js ?v=2)。
 //       PR #26 も独立に v46 を名乗っていたため v56 に繰り上げた。
 // v57 = 経由条件・日別ダイヤ・かな読みの修正。Workerと外枠の版を同期。
-const VERSION = 'v57';
+const VERSION = 'v58';
 const CACHE_NAME = `transit-${VERSION}`;
 
 // アプリの外枠。これが無いと起動すらできない。
