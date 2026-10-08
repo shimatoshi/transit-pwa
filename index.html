@@ -1739,7 +1739,7 @@ function doSearch() {
     days: Array.from({ length: 4 }, (_, i) => getDayType(i)),
   };
   lastSearchOpts = opts;             // 前の便/次の便で再利用
-  // 到着/出発の時刻指定を覚えておき、どのソートモードでも第2キーとして
+  // 到着/出発の時刻指定を覚えておき、どのソートモードでも第1キーとして
   // 「指定時刻に近い順」を効かせる(now指定=時刻未指定のときは効かせない)
   searchTimeCtx = st.explicit
     ? { type: st.type, minutes: st.minutes }
@@ -2248,15 +2248,12 @@ function timeProximity(j) {
   const t = searchTimeCtx.type === 'arr' ? j.arr : j.dep;
   return Math.abs(t - searchTimeCtx.minutes);
 }
-// 第1キー(選択中のソートモードの基準)が同点のとき、指定時刻に近い順を
-// 第2優先軸として挿入する。これにより早い順・安い順・乗換少のどれを選んでも、
-// 第1キーが並ぶ帯の中では指定時刻(到着なら到着時刻・出発なら出発時刻)に最も
-// 近い便が上位へ来る。第1キーの基準自体は従来のまま維持する。
-// (comparator の推移律を保つため第1キーは量子化せず厳密比較のまま扱う)
+// 時刻指定時は指定時刻への近さを最優先し、同点なら選択中の基準で並べる。
+// 時刻未指定時は timeProximity が0なので、従来の並び順を保つ。
 const SORTERS = {
-  fast: (a, b) => (a.arr - b.arr) || (timeProximity(a) - timeProximity(b)) || (a.transfers - b.transfers) || (b.dep - a.dep),
-  cheap: (a, b) => (fareOf(a) - fareOf(b)) || (timeProximity(a) - timeProximity(b)) || (a.arr - b.arr) || (a.transfers - b.transfers),
-  transfer: (a, b) => (a.transfers - b.transfers) || (timeProximity(a) - timeProximity(b)) || (a.arr - b.arr) || (fareOf(a) - fareOf(b)),
+  fast: (a, b) => (timeProximity(a) - timeProximity(b)) || (a.arr - b.arr) || (a.transfers - b.transfers) || (b.dep - a.dep),
+  cheap: (a, b) => (timeProximity(a) - timeProximity(b)) || (fareOf(a) - fareOf(b)) || (a.arr - b.arr) || (a.transfers - b.transfers),
+  transfer: (a, b) => (timeProximity(a) - timeProximity(b)) || (a.transfers - b.transfers) || (a.arr - b.arr) || (fareOf(a) - fareOf(b)),
 };
 const SORT_LABELS = { fast: '早い順', cheap: '安い順', transfer: '乗換が少ない順' };
 
