@@ -15,7 +15,7 @@ import sqlite3
 import time
 import unicodedata
 from datetime import datetime, timezone
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 import urllib.request
 import zipfile
 
@@ -133,7 +133,7 @@ def browser_fetch(url):
 
 
 def fetch(url):
-    req = urllib.request.Request(url, headers={
+    req = urllib.request.Request(quote(url, safe="/:?=&%+#@;,!$'()*[]"), headers={
         'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36',
         'Accept-Encoding': 'gzip', 'Accept-Language': 'ja-JP,ja;q=0.9'})
     with urllib.request.urlopen(req, timeout=45) as response:
@@ -217,13 +217,25 @@ def process(db, root, task):
         result['zip_file'] = str(destination.relative_to(root))
         result['use_status'] = 'expired' if result['expired'] else 'ready' if result['rail_trips'] else 'no_rail_trips'
     elif task['kind'] in ('source', 'document'):
-        if task['kind'] == 'document':
-            if not blob.startswith(b'%PDF'):
-                raise ValueError('Expected PDF document')
-            destination = root / 'documents' / (hashlib.sha256(blob).hexdigest() + '.pdf')
+        media = None
+        if blob.startswith(b'%PDF'):
+            media = ('pdf', 'application/pdf', 'needs_pdf_parser')
+        elif blob.startswith(b'\xff\xd8\xff'):
+            media = ('jpg', 'image/jpeg', 'needs_image_parser')
+        elif blob.startswith(b'\x89PNG\r\n\x1a\n'):
+            media = ('png', 'image/png', 'needs_image_parser')
+        elif blob.startswith((b'GIF87a', b'GIF89a')):
+            media = ('gif', 'image/gif', 'needs_image_parser')
+        elif blob.startswith(b'RIFF') and blob[8:12] == b'WEBP':
+            media = ('webp', 'image/webp', 'needs_image_parser')
+        if media:
+            destination = root / 'documents' / (hashlib.sha256(blob).hexdigest() + '.' + media[0])
             destination.parent.mkdir(exist_ok=True)
             destination.write_bytes(blob)
-            result = {'document_file': str(destination.relative_to(root)), 'review_status': 'needs_pdf_parser'}
+            result = {'document_file': str(destination.relative_to(root)),
+                      'media_type': media[1], 'review_status': media[2]}
+        elif task['kind'] == 'document':
+            raise ValueError('Expected PDF/image document')
         else:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(blob, 'html.parser')
@@ -270,7 +282,7 @@ def process(db, root, task):
     sha = hashlib.sha256(blob).hexdigest()
     raw = root / 'raw'
     raw.mkdir(exist_ok=True)
-    if task['kind'] not in ('gtfs', 'document'):
+    if task['kind'] not in ('gtfs', 'document') and not result.get('document_file'):
         with gzip.open(raw / (sha + '.html.gz'), 'wb') as f:
             f.write(blob)
         result['raw_file'] = 'raw/' + sha + '.html.gz'
