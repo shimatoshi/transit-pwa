@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 import collector as c
 
@@ -47,6 +48,33 @@ class CollectionTests(unittest.TestCase):
         result = c.html_parse('train', html.encode())
         self.assertEqual(result['stops'][1]['arrival'], '00:05')
         self.assertEqual(result['stops'][1]['departure'], '00:06')
+
+    def test_source_download_endpoint_keeps_pdf_and_image(self):
+        for blob, media_type in [(b'%PDF-1.7\nfixture', 'application/pdf'),
+                                 (b'\xff\xd8\xfffixture', 'image/jpeg')]:
+            with self.subTest(media_type=media_type), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                db = c.database(root)
+                c.enqueue(db, 'source:download', 'source',
+                          'https://example.test/download?file=/timetable.pdf', {}, 3)
+                db.commit()
+                task = db.execute('SELECT * FROM tasks').fetchone()
+                with patch.object(c, 'fetch', return_value=blob):
+                    c.process(db, root, task)
+                result = json.loads(db.execute('SELECT data FROM results').fetchone()[0])
+                self.assertEqual(result['media_type'], media_type)
+                self.assertEqual((root / result['document_file']).read_bytes(), blob)
+                self.assertNotIn('raw_file', result)
+
+    def test_fetch_encodes_japanese_url_without_double_encoding(self):
+        class Response(io.BytesIO):
+            pass
+        with patch.object(c.urllib.request, 'urlopen', return_value=Response(b'content')) as get:
+            self.assertEqual(c.fetch('https://example.test/時刻表%20.pdf?file=路線.pdf'), b'content')
+            requested = get.call_args.args[0].full_url
+            self.assertIn('%E6%99%82', requested)
+            self.assertIn('%20.pdf', requested)
+            self.assertNotIn('%2520', requested)
 
 if __name__ == '__main__':
     unittest.main()
